@@ -19,6 +19,7 @@
 #define IDM_CLOSE                       401
 #define IDM_SAVEAS                      402
 #define IDM_PRINT                       403
+#define IDM_FIND_FILE_IN_EXPLORER		404
 #define IDM_EXIT                        405
 #define IDM_REFRESH                     406
 #define IDM_SAVEAS_BOOKMARK             407
@@ -105,7 +106,6 @@
 #define IDM_ADVANCED_OPTIONS            597
 #define IDM_FAV_FIRST                   600
 #define IDM_FAV_LAST                    800
-#define IDM_FIND_FILE_IN_EXPLORER		900
 #define IDC_GOTO_PAGE_EDIT              1000
 #define IDC_GOTO_PAGE_GO                1001
 #define IDC_BUTTON2                     1002
