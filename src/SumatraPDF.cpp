@@ -2612,6 +2612,25 @@ static UINT_PTR CALLBACK FileOpenHook(HWND hDlg, UINT uiMsg, WPARAM wParam, LPAR
 }
 #endif
 
+
+void OnFindInExplorer(WindowInfo& win){
+	if (!HasPermission(Perm_DiskAccess)) 
+		return;
+
+	if (gPluginMode)
+		return;
+
+	TabInfo *tab = win.currentTab;
+
+	if (tab != NULL) {
+		ITEMIDLIST *pidl = ILCreateFromPath(tab->filePath);
+		if (pidl) {
+			SHOpenFolderAndSelectItems(pidl, 0, 0, 0);
+			ILFree(pidl);
+		}
+	}
+}
+
 void OnMenuOpen(WindowInfo& win)
 {
     if (!HasPermission(Perm_DiskAccess)) return;
@@ -3752,6 +3771,9 @@ static LRESULT FrameOnCommand(WindowInfo *win, HWND hwnd, UINT msg, WPARAM wPara
     // most of them require a win, the few exceptions are no-ops
     switch (wmId)
     {
+		case IDM_FIND_FILE_IN_EXPLORER:
+			OnFindInExplorer(*win);
+			break;
         case IDM_OPEN:
         case IDT_FILE_OPEN:
             OnMenuOpen(*win);

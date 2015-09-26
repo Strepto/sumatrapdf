@@ -380,6 +380,9 @@
     <ClCompile Include="..\src\WindowInfo.cpp" />
     <ClCompile Include="..\src\regress\Regress.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <Image Include="..\src\toolbar_12.bmp" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

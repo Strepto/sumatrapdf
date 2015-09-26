@@ -52,6 +52,8 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     { 8,   IDM_FIND_PREV,         _TRN("Find Previous"),  0 },
     { 9,   IDM_FIND_NEXT,         _TRN("Find Next"),      0 },
     { 10,  IDM_FIND_MATCH,        _TRN("Match Case"),     0 },
+    { -1,  IDM_FIND_FIRST,        nullptr,                   0 },
+	{ 13, IDM_FIND_FILE_IN_EXPLORER, _TRN("Show Document In File Explorer"), MF_REQ_DISK_ACCESS},
 };
 
 #define TOOLBAR_BUTTONS_COUNT dimof(gToolbarButtons)
@@ -580,7 +582,7 @@ void CreateToolbar(WindowInfo *win)
 
     // the name of the bitmap contains the number of icons so that after adding/removing
     // icons a complete default toolbar is used rather than an incomplete customized one
-    HBITMAP hbmp = LoadExternalBitmap(GetModuleHandle(nullptr), L"toolbar_11.bmp", IDB_TOOLBAR);
+    HBITMAP hbmp = LoadExternalBitmap(GetModuleHandle(nullptr), L"toolbar_12.bmp", IDB_TOOLBAR);
     SizeI size = GetBitmapSize(hbmp);
     // stretch the toolbar bitmaps for higher DPI settings
     // TODO: get nicely interpolated versions of the toolbar icons for higher resolutions
