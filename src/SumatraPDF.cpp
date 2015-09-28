@@ -2624,10 +2624,13 @@ void OnFindInExplorer(WindowInfo& win){
 
 	if (tab != NULL) {
 		ITEMIDLIST *pidl = ILCreateFromPath(tab->filePath);
+		HRESULT hr;
 		if (pidl) {
-			SHOpenFolderAndSelectItems(pidl, 0, 0, 0);
+			hr = SHOpenFolderAndSelectItems(pidl, 0, 0, 0);
 			ILFree(pidl);
 		}
+		
+		//TODO: Handle HRESULT /File not found?
 	}
 }
 
@@ -3292,7 +3295,16 @@ bool FrameOnKeydown(WindowInfo *win, WPARAM key, LPARAM lparam, bool inTextfield
         // so special-case it before the win->IsDocLoaded() check
         BrowseFolder(*win, VK_RIGHT == key);
         return true;
-    }
+	}
+	else if ((VK_UP == key) && isShift && isCtrl &&
+			!win->IsAboutWindow() && !inTextfield) {
+			// file/folder browsing should also work when an error page is displayed,
+			// so special-case it before the win->IsDocLoaded() check
+			OnFindInExplorer(*win);
+			return true;
+	}
+
+	
 
     if (!win->IsDocLoaded())
         return false;
