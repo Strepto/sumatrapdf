@@ -54,18 +54,11 @@ bool IsProcess64() {
     return 8 == sizeof(void*);
 }
 
-// return true if running on 64-bit
+// return true if running on a 64-bit OS
 bool IsOs64() {
-    // 64-bit process cam only run on 64-bit OS
-    if (IsProcess64()) {
-        return true;
-    }
-    // this is 32-bit process. see if running under WOW64
-    BOOL isWow = FALSE;
-    if (DynIsWow64Process && DynIsWow64Process(GetCurrentProcess(), &isWow)) {
-        return isWow == TRUE;
-    }
-    return false;
+    // 64-bit processes can only run on a 64-bit OS,
+    // 32-bit processes run on a 64-bit OS under WOW64
+    return IsProcess64() || IsRunningInWow64();
 }
 
 // return true if OS and our process have the same arch (i.e. both are 32bit
@@ -214,32 +207,38 @@ void DisableDataExecution() {
 }
 
 // Code from http://www.halcyon.com/~ast/dload/guicon.htm
+// See https://github.com/benvanik/xenia/issues/228 for the VS2015 fix
 void RedirectIOToConsole() {
     CONSOLE_SCREEN_BUFFER_INFO coninfo;
-    int hConHandle;
 
-    // allocate a console for this app
     AllocConsole();
 
-    // set the screen buffer to be big enough to let us scroll text
+    // make buffer big enough to allow scrolling
     GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &coninfo);
     coninfo.dwSize.Y = 500;
     SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), coninfo.dwSize);
 
-    // redirect unbuffered STDOUT to the console
-    hConHandle = _open_osfhandle((intptr_t)GetStdHandle(STD_OUTPUT_HANDLE), _O_TEXT);
+    // redirect STDIN, STDOUT and STDERR to the console
+#if _MSC_VER < 1900
+    int hConHandle = _open_osfhandle((intptr_t)GetStdHandle(STD_OUTPUT_HANDLE), _O_TEXT);
     *stdout = *_fdopen(hConHandle, "w");
-    setvbuf(stdout, nullptr, _IONBF, 0);
 
-    // redirect unbuffered STDERR to the console
-    hConHandle = _open_osfhandle((intptr_t)GetStdHandle(STD_ERROR_HANDLE), _O_TEXT);
+    hConHandle = _open_osfhandle((intptr_t) GetStdHandle(STD_ERROR_HANDLE), _O_TEXT);
     *stderr = *_fdopen(hConHandle, "w");
-    setvbuf(stderr, nullptr, _IONBF, 0);
 
-    // redirect unbuffered STDIN to the console
-    hConHandle = _open_osfhandle((intptr_t)GetStdHandle(STD_INPUT_HANDLE), _O_TEXT);
+    hConHandle = _open_osfhandle((intptr_t) GetStdHandle(STD_INPUT_HANDLE), _O_TEXT);
     *stdin = *_fdopen(hConHandle, "r");
+#else
+    FILE *con;
+    freopen_s(&con, "CONOUT$", "w", stdout);
+    freopen_s(&con, "CONOUT$", "w", stderr);
+    freopen_s(&con, "CONIN$", "r", stdin);
+#endif
+
+    // make them unbuffered
     setvbuf(stdin, nullptr, _IONBF, 0);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
 }
 
 /* Return the full exe path of my own executable.
@@ -556,11 +555,12 @@ bool CopyTextToClipboard(const WCHAR *text, bool appendOnly) {
         EmptyClipboard();
     }
 
-    HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, (str::Len(text) + 1) * sizeof(WCHAR));
+    size_t n = str::Len(text) + 1;
+    HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, n * sizeof(WCHAR));
     if (handle) {
         WCHAR *globalText = (WCHAR *)GlobalLock(handle);
         if (globalText) {
-            lstrcpy(globalText, text);
+            str::BufSet(globalText, n, text);
         }
         GlobalUnlock(handle);
 

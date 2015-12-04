@@ -45,6 +45,7 @@
 
 // utils
 #include "BaseUtil.h"
+#include "WinUtil.h"
 // rendering engines
 #include "BaseEngine.h"
 #include "EngineManager.h"
@@ -56,10 +57,6 @@
 #include "PdfSync.h"
 #include "TextSelection.h"
 #include "TextSearch.h"
-#include "WinUtil.h"
-
-// Note: adding chm handling to DisplayModel is a hack, because DisplayModel
-// doesn't map to chm features well.
 
 // if true, we pre-render the pages right before and after the visible pages
 static bool gPredictiveRender = true;
@@ -711,7 +708,7 @@ int DisplayModel::GetPageNoByPoint(PointI pt)
 
     for (int pageNo = 1; pageNo <= PageCount(); ++pageNo) {
         PageInfo *pageInfo = GetPageInfo(pageNo);
-        assert(0.0 == pageInfo->visibleRatio || pageInfo->shown);
+        AssertCrash(0.0 == pageInfo->visibleRatio || pageInfo->shown);
         if (!pageInfo->shown)
             continue;
 
@@ -732,7 +729,7 @@ int DisplayModel::GetPageNextToPoint(PointI pt)
 
     for (int pageNo = 1; pageNo <= PageCount(); ++pageNo) {
         PageInfo *pageInfo = GetPageInfo(pageNo);
-        assert(0.0 == pageInfo->visibleRatio || pageInfo->shown);
+        AssertCrash(0.0 == pageInfo->visibleRatio || pageInfo->shown);
         if (!pageInfo->shown)
             continue;
 
@@ -753,7 +750,7 @@ int DisplayModel::GetPageNextToPoint(PointI pt)
 PointI DisplayModel::CvtToScreen(int pageNo, PointD pt)
 {
     PageInfo *pageInfo = GetPageInfo(pageNo);
-    assert(pageInfo);
+    CrashIf(!pageInfo);
     if (!pageInfo)
         return PointI();
 
@@ -778,7 +775,7 @@ PointD DisplayModel::CvtFromScreen(PointI pt, int pageNo)
         pageNo = GetPageNextToPoint(pt);
 
     const PageInfo *pageInfo = GetPageInfo(pageNo);
-    assert(pageInfo);
+    CrashIf(!pageInfo);
     if (!pageInfo)
         return PointD();
 

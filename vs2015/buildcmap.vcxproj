@@ -43,7 +43,7 @@
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v140_xp</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -56,7 +56,7 @@
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v140_xp</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleasePrefast|Win32'" Label="Configuration">
@@ -145,13 +145,13 @@
       <DisableSpecificWarnings>4127;4324;4458;4800;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <PreprocessorDefinitions>WIN32;_WIN32;_CRT_SECURE_NO_WARNINGS;WINVER=0x0501;_WIN32_WINNT=0x0501;_HAS_EXCEPTIONS=0;DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
-      <ProgramDataBaseFileName>$(OutDir)$(TargetName).pdb</ProgramDataBaseFileName>
       <Optimization>Disabled</Optimization>
       <MinimalRebuild>false</MinimalRebuild>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <ExceptionHandling>false</ExceptionHandling>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/arch:IA32 %(AdditionalOptions)</AdditionalOptions>
       <CompileAs>CompileAsC</CompileAs>
     </ClCompile>
     <Link>
@@ -160,11 +160,8 @@
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
     <PostBuildEvent>
-      <Command>xcopy /Q /E /Y /I ..\dbg\cmapdump.exe ..\bin &gt; nul
+      <Command>IF EXIST ..\dbg\cmapdump.exe\ (xcopy /Q /E /Y /I ..\dbg\cmapdump.exe ..\bin &gt; nul) ELSE (xcopy /Q /Y /I ..\dbg\cmapdump.exe ..\bin &gt; nul)
 cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -176,7 +173,6 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <DisableSpecificWarnings>4127;4324;4458;4800;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <PreprocessorDefinitions>WIN32;_WIN32;_CRT_SECURE_NO_WARNINGS;WINVER=0x0501;_WIN32_WINNT=0x0501;_HAS_EXCEPTIONS=0;DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <ProgramDataBaseFileName>$(OutDir)$(TargetName).pdb</ProgramDataBaseFileName>
       <Optimization>Disabled</Optimization>
       <MinimalRebuild>false</MinimalRebuild>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -191,11 +187,8 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
     <PostBuildEvent>
-      <Command>xcopy /Q /E /Y /I ..\dbg64\cmapdump.exe ..\bin &gt; nul
+      <Command>IF EXIST ..\dbg64\cmapdump.exe\ (xcopy /Q /E /Y /I ..\dbg64\cmapdump.exe ..\bin &gt; nul) ELSE (xcopy /Q /Y /I ..\dbg64\cmapdump.exe ..\bin &gt; nul)
 cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -207,7 +200,6 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <DisableSpecificWarnings>4127;4324;4458;4800;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <PreprocessorDefinitions>WIN32;_WIN32;_CRT_SECURE_NO_WARNINGS;WINVER=0x0501;_WIN32_WINNT=0x0501;_HAS_EXCEPTIONS=0;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <ProgramDataBaseFileName>$(OutDir)$(TargetName).pdb</ProgramDataBaseFileName>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -217,6 +209,7 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <ExceptionHandling>false</ExceptionHandling>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/arch:IA32 %(AdditionalOptions)</AdditionalOptions>
       <CompileAs>CompileAsC</CompileAs>
     </ClCompile>
     <Link>
@@ -227,11 +220,8 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
     <PostBuildEvent>
-      <Command>xcopy /Q /E /Y /I ..\rel\cmapdump.exe ..\bin &gt; nul
+      <Command>IF EXIST ..\rel\cmapdump.exe\ (xcopy /Q /E /Y /I ..\rel\cmapdump.exe ..\bin &gt; nul) ELSE (xcopy /Q /Y /I ..\rel\cmapdump.exe ..\bin &gt; nul)
 cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -243,7 +233,6 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <DisableSpecificWarnings>4127;4324;4458;4800;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <PreprocessorDefinitions>WIN32;_WIN32;_CRT_SECURE_NO_WARNINGS;WINVER=0x0501;_WIN32_WINNT=0x0501;_HAS_EXCEPTIONS=0;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <ProgramDataBaseFileName>$(OutDir)$(TargetName).pdb</ProgramDataBaseFileName>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -263,11 +252,8 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
     <PostBuildEvent>
-      <Command>xcopy /Q /E /Y /I ..\rel64\cmapdump.exe ..\bin &gt; nul
+      <Command>IF EXIST ..\rel64\cmapdump.exe\ (xcopy /Q /E /Y /I ..\rel64\cmapdump.exe ..\bin &gt; nul) ELSE (xcopy /Q /Y /I ..\rel64\cmapdump.exe ..\bin &gt; nul)
 cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -278,7 +264,6 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <DisableSpecificWarnings>4127;4324;4458;4800;28125;28252;28253;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <PreprocessorDefinitions>WIN32;_WIN32;_CRT_SECURE_NO_WARNINGS;WINVER=0x0501;_WIN32_WINNT=0x0501;_HAS_EXCEPTIONS=0;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <ProgramDataBaseFileName>$(OutDir)$(TargetName).pdb</ProgramDataBaseFileName>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -288,7 +273,7 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <ExceptionHandling>false</ExceptionHandling>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <AdditionalOptions>/analyze %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/arch:IA32 /analyze %(AdditionalOptions)</AdditionalOptions>
       <CompileAs>CompileAsC</CompileAs>
     </ClCompile>
     <Link>
@@ -298,11 +283,8 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <OptimizeReferences>true</OptimizeReferences>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
     <PostBuildEvent>
-      <Command>xcopy /Q /E /Y /I ..\relPrefast\cmapdump.exe ..\bin &gt; nul
+      <Command>IF EXIST ..\relPrefast\cmapdump.exe\ (xcopy /Q /E /Y /I ..\relPrefast\cmapdump.exe ..\bin &gt; nul) ELSE (xcopy /Q /Y /I ..\relPrefast\cmapdump.exe ..\bin &gt; nul)
 cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -313,7 +295,6 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <DisableSpecificWarnings>4127;4324;4458;4800;28125;28252;28253;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <PreprocessorDefinitions>WIN32;_WIN32;_CRT_SECURE_NO_WARNINGS;WINVER=0x0501;_WIN32_WINNT=0x0501;_HAS_EXCEPTIONS=0;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <ProgramDataBaseFileName>$(OutDir)$(TargetName).pdb</ProgramDataBaseFileName>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -333,21 +314,13 @@ cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
       <OptimizeReferences>true</OptimizeReferences>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
     <PostBuildEvent>
-      <Command>xcopy /Q /E /Y /I ..\relPrefast64\cmapdump.exe ..\bin &gt; nul
+      <Command>IF EXIST ..\relPrefast64\cmapdump.exe\ (xcopy /Q /E /Y /I ..\relPrefast64\cmapdump.exe ..\bin &gt; nul) ELSE (xcopy /Q /Y /I ..\relPrefast64\cmapdump.exe ..\bin &gt; nul)
 cd .. &amp; call scripts\gen_mupdf_generated.bat bin\cmapdump.exe</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\tools\premake\no_op_console.c" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="cmapdump.vcxproj">
-      <Project>{BC6E1C8A-A83B-7795-D154-653DBD80AC23}</Project>
-    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

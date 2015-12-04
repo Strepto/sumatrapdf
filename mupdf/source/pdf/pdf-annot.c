@@ -498,8 +498,9 @@ pdf_transform_annot(pdf_annot *annot)
 		h = 0;
 	else
 		h = (rect.y1 - rect.y0) / (bbox.y1 - bbox.y0);
-	x = rect.x0 - bbox.x0;
-	y = rect.y0 - bbox.y0;
+	/* cf. https://github.com/sumatrapdfreader/sumatrapdf/issues/318 */
+	x = rect.x0 - bbox.x0 * w;
+	y = rect.y0 - bbox.y0 * h;
 
 	fz_pre_scale(fz_translate(&annot->matrix, x, y), w, h);
 }
@@ -618,7 +619,7 @@ pdf_create_annot_ex(pdf_document *doc, const fz_rect *rect, pdf_obj *base_obj, f
 }
 
 #define ANNOT_OC_VIEW_ONLY \
-	"<< /OCGs << /Usage << /Print << /PrintState /OFF >> /Export << /ExportState /OFF >> >> >> >>"
+	"<< /Type /OCMD /OCGs << /Type /OCG /Usage << /Print << /PrintState /OFF >> /Export << /ExportState /OFF >> >> >> >>"
 
 static pdf_obj *
 pdf_clone_for_view_only(pdf_document *doc, pdf_obj *obj)
@@ -628,6 +629,8 @@ pdf_clone_for_view_only(pdf_document *doc, pdf_obj *obj)
 
 	fz_try(ctx)
 	{
+		if (!doc->ocg)
+			doc->ocg = fz_calloc(doc->ctx, 1, sizeof(*doc->ocg));
 		pdf_dict_puts_drop(obj, "OC", pdf_new_obj_from_str(doc, ANNOT_OC_VIEW_ONLY));
 	}
 	fz_catch(ctx)

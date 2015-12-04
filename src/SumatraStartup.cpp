@@ -35,6 +35,7 @@
 #include "WindowInfo.h"
 #include "TabInfo.h"
 #include "resource.h"
+#include "ParseCommandLine.h"
 #include "AppPrefs.h"
 #include "AppTools.h"
 #include "Canvas.h"
@@ -42,7 +43,6 @@
 #include "CrashHandler.h"
 #include "FileThumbnails.h"
 #include "Notifications.h"
-#include "ParseCommandLine.h"
 #include "Print.h"
 #include "Search.h"
 #include "Selection.h"
@@ -53,6 +53,7 @@
 #include "uia/Provider.h"
 #include "StressTesting.h"
 #include "Version.h"
+#include "Tests.h"
 
 // "SumatraPDF yellow" similar to the one use for icon and installer
 #define ABOUT_BG_LOGO_COLOR     RGB(0xFF, 0xF2, 0x00)
@@ -429,7 +430,7 @@ static HWND FindPrevInstWindow(HANDLE *hMutex)
     // create a unique identifier for this executable
     // (allows independent side-by-side installations)
     ScopedMem<WCHAR> exePath(GetExePath());
-    str::ToLower(exePath);
+    str::ToLowerInPlace(exePath);
     uint32_t hash = MurmurHash2(exePath.Get(), str::Len(exePath) * sizeof(WCHAR));
     ScopedMem<WCHAR> mapId(str::Format(L"SumatraPDF-%08x", hash));
 
@@ -569,6 +570,15 @@ static bool AutoUpdateMain()
 }
 #endif
 
+static void ShutdownCommon() {
+    mui::Destroy();
+    uitask::Destroy();
+    UninstallCrashHandler();
+    dbghelp::FreeCallstackLogs();
+    // output leaks after all destructors of static objects have run
+    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+}
+
 int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR cmdLine, _In_ int nCmdShow)
 {
     UNUSED(hPrevInstance); UNUSED(cmdLine); UNUSED(nCmdShow);
@@ -631,12 +641,25 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
     CommandLineInfo i;
     i.ParseCommandLine(GetCommandLine());
+
+    if (i.testRenderPage) {
+        TestRenderPage(i);
+        ShutdownCommon();
+        return 0;
+    }
+
+    if (i.testExtractPage) {
+        TestExtractPage(i);
+        ShutdownCommon();
+        return 0;
+    }
+
     InitializePolicies(i.restrictedUse);
     if (i.appdataDir)
         SetAppDataPath(i.appdataDir);
 
     prefs::Load();
-    i.UpdateGlobalPrefs();
+    prefs::UpdateGlobalPrefs(i);
     SetCurrentLang(i.lang ? i.lang : gGlobalPrefs->uiLanguage);
 
     // This allows ad-hoc comparison of gdi, gdi+ and gdi+ quick when used
@@ -743,6 +766,9 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
         }
     }
     ResetSessionState(gGlobalPrefs->sessionData);
+    // prevent the same session from being restored twice
+    if (restoreSession && !(gGlobalPrefs->reuseInstance || gGlobalPrefs->useTabs))
+        prefs::Save();
 
     for (const WCHAR *filePath : i.fileNames) {
         if (restoreSession && FindWindowInfoByFile(filePath, true))

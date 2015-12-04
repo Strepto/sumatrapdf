@@ -1,20 +1,25 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
 	"crypto/md5"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/goamz/goamz/aws"
+	"github.com/goamz/goamz/s3"
 )
 
 /*
@@ -41,28 +46,38 @@ type FileInfo struct {
 	S3FullPath     string // S3PathSha1Part + ext
 	Sha1Hex        string
 	Md5Hex         string
-	ShouldCompress bool
-	Size           int    // size of the file, not compressed
-	CompressedData []byte // if is compressed, this is gzipped data
+	Md5B64         string
+	Size           int64 // size of the file, not compressed
+}
+
+type FileInS3 struct {
+	S3Path  string // full path in S3 i.e. testfiles/xx/yy/zzzzz.ext
+	Name    string // original name of the file
+	Size    int64
+	Sha1Hex string
+	Md5Hex  string
 }
 
 const (
-	s3Bucket = "kjkpub"
-	s3Dir    = "files/"
+	s3Bucket     = "kjkpub"
+	s3Dir        = "testfiles/"
+	MaxS3Results = 1000
 )
 
 var (
-	flgPub    bool
-	flgPublic bool
-
+	flgPub        bool
+	flgPublic     bool
+	flgList       bool
 	cachedSecrets *Secrets
 
 	wgUploads sync.WaitGroup
 	inFatal   bool
-	validExts = []string{".pdf", ".mobi", ".epub", ".chm", ".cbz", "cbr"}
-	// only try to compress files that are not already compressed
-	toMaybeCompressExts = []string{".pdf", ".mobi", ".chm"}
+	validExts = []string{".pdf", ".mobi", ".epub", ".chm", ".cbz", ".cbr", ".xps", ".djvu"}
 )
+
+func (fi *FileInS3) Url() string {
+	return "https://kjkpub.s3.amazonaws.com/testfiles/" + fi.S3Path
+}
 
 func printStack() {
 	buf := make([]byte, 1024*164)
@@ -115,11 +130,6 @@ func isSupportedFile(fileName string) bool {
 	return strInArr(ext, validExts)
 }
 
-func shouldTryCompressFile(fileName string) bool {
-	ext := strings.ToLower(filepath.Ext(fileName))
-	return strInArr(ext, toMaybeCompressExts)
-}
-
 func readSecretsMust() *Secrets {
 	if cachedSecrets != nil {
 		return cachedSecrets
@@ -144,25 +154,37 @@ func sha1HexToS3Path(sha1Hex string) string {
 	return fmt.Sprintf("%s/%s/%s", sha1Hex[:2], sha1Hex[2:4], sha1Hex[4:])
 }
 
+func removeExt(s string) string {
+	ext := filepath.Ext(s)
+	if len(ext) == 0 {
+		return s
+	}
+	return s[:len(s)-len(ext)]
+}
+
+// reverse of sha1HexToS3Path
+func s3PathToSha1Hex(s string) string {
+	s = removeExt(s)
+	s = s[len(s)-42:]
+	fatalif(s[2] != '/', "s[2] is '%c', should be '/'", s[2])
+	s = strings.Replace(s, "/", "", -1)
+	fatalif(len(s) != 40, "len(s) is %d, should be 40", len(s))
+	return s
+}
+
 func perc(total, n int) float64 {
 	return float64(n) * 100 / float64(total)
 }
 
 func calcFileInfo(fi *FileInfo) {
 	fmt.Printf("calcFileInfo: '%s'\n", fi.Path)
-	const BufSize = 16 * 1024
-	var buf [BufSize]byte
+	var buf [16 * 1024]byte
 	r, err := os.Open(fi.Path)
 	fataliferr(err)
 	defer r.Close()
 	sha1 := sha1.New()
 	md5Hash := md5.New()
-	fi.ShouldCompress = false
-	tryCompressFirsBlock := shouldTryCompressFile(fi.Path)
-	var gzw *gzip.Writer
-	compressedData := &bytes.Buffer{}
 	fi.Size = 0
-	fi.CompressedData = nil
 	for {
 		n, err := r.Read(buf[:])
 		if err == io.EOF {
@@ -171,75 +193,68 @@ func calcFileInfo(fi *FileInfo) {
 		d := buf[:n]
 		fataliferr(err)
 		fatalif(n == 0, "n is 0")
-		fi.Size += n
+		fi.Size += int64(n)
 		_, err = sha1.Write(d)
 		fataliferr(err)
 		_, err = md5Hash.Write(d)
 		fataliferr(err)
-		if tryCompressFirsBlock {
-			tryCompressFirsBlock = false
-			gz, err := gzip.NewWriterLevel(compressedData, gzip.BestCompression)
-			fataliferr(err)
-			_, err = gz.Write(d)
-			fataliferr(err)
-			gz.Close()
-			compressedSize := compressedData.Len()
-			saved := n - compressedSize
-			// relatively high threshold of 20% savings on compression
-			fi.ShouldCompress = saved > 0 && perc(compressedSize, saved) > 20
-			diff := n - compressedSize
-			fmt.Printf("  should compress: %v, %d => %d (%d %.2f%%)\n", fi.ShouldCompress, n, compressedSize, diff, perc(n, diff))
-			if fi.ShouldCompress {
-				compressedData = &bytes.Buffer{}
-				gzw, err = gzip.NewWriterLevel(compressedData, gzip.BestCompression)
-				fataliferr(err)
-			}
-		}
-		if gzw != nil {
-			_, err = gzw.Write(d)
-			fataliferr(err)
-		}
 	}
 	sha1Sum := sha1.Sum(nil)
 	fi.Sha1Hex = fmt.Sprintf("%x", sha1Sum)
 
-	if gzw != nil {
-		gzw.Close()
-		compressedSize := compressedData.Len()
-		// only use compressed if compressed by at least 5%
-		if compressedSize+(compressedSize/20) < fi.Size {
-			fi.CompressedData = compressedData.Bytes()
-		}
-	}
-
 	md5Sum := md5Hash.Sum(nil)
 	fi.Md5Hex = fmt.Sprintf("%x", md5Sum)
-	// if compressed, md5 is of the compressed content
-	if fi.CompressedData != nil {
-		md5Sum2 := md5.Sum(fi.CompressedData)
-		fi.Md5Hex = fmt.Sprintf("%x", md5Sum2[:])
-	}
+	fi.Md5B64 = base64.StdEncoding.EncodeToString(md5Sum)
 
 	fi.S3PathSha1Part = sha1HexToS3Path(fi.Sha1Hex)
 	ext := strings.ToLower(filepath.Ext(fi.Path))
-	if fi.CompressedData != nil {
-		fi.S3FullPath = fi.S3PathSha1Part + ".gz" + ext
-	} else {
-		fi.S3FullPath = fi.S3PathSha1Part + ext
-	}
+	fi.S3FullPath = s3Dir + fi.S3PathSha1Part + ext
 	fmt.Printf("  sha1: %s\n", fi.Sha1Hex)
 	fmt.Printf("   md5: %s\n", fi.Md5Hex)
+	fmt.Printf("   md5: %s\n", fi.Md5B64)
 	fmt.Printf("    s3: %s\n", fi.S3FullPath)
 	fmt.Printf("  size: %d\n", fi.Size)
-	if fi.CompressedData != nil {
-		sizedCompressed := len(fi.CompressedData)
-		saved := fi.Size - sizedCompressed
-		fmt.Printf("  size compressed: %d (saves %d %.2f%%)\n", sizedCompressed, saved, perc(fi.Size, saved))
-	}
+}
+
+// TODO: speed it up by getting all files once at startup and using hashtable
+// to check for existence
+func sha1ExistsInS3Must(sha1 string) bool {
+	// must do a list, because we add file extension at the end
+	prefix := s3Dir + sha1[:2] + "/" + sha1[2:4] + "/" + sha1[4:]
+	bucket := s3GetBucket()
+	resp, err := bucket.List(prefix, "", "", MaxS3Results)
+	fataliferr(err)
+	keys := resp.Contents
+	fatalif(len(keys) > 1, "len(keys) == %d (should be 0 or 1)", len(keys))
+	return len(keys) == 1
 }
 
 func uploadFileInfo(fi *FileInfo) {
-	// TODO: write me
+	timeStart := time.Now()
+	pathRemote := fi.S3FullPath
+	pathLocal := fi.Path
+	fmt.Printf("uploadFileInfo(): %s => %s, pub: %v, %d bytes", pathLocal, pathRemote, isPublic(), fi.Size)
+	if sha1ExistsInS3Must(fi.Sha1Hex) {
+		// TODO: if different permissions (public vs. private), change the perms
+		// TODO: for extra paranoia could verify that fi.Size matches size in S3
+		fmt.Printf("  skipping because already exists\n")
+		return
+	}
+	bucket := s3GetBucket()
+	d, err := ioutil.ReadFile(pathLocal)
+	fataliferr(err)
+	mimeType := mime.TypeByExtension(filepath.Ext(pathLocal))
+	perm := s3.Private
+	if isPublic() {
+		perm = s3.PublicRead
+	}
+	opts := s3.Options{}
+	opts.Meta = make(map[string][]string)
+	opts.Meta["name"] = []string{filepath.Base(pathLocal)}
+	opts.ContentMD5 = fi.Md5B64
+	err = bucket.Put(pathRemote, d, mimeType, perm, opts)
+	fataliferr(err)
+	fmt.Printf(" took %s\n", time.Since(timeStart))
 }
 
 func uploadWorker(files chan *FileInfo) {
@@ -280,6 +295,70 @@ func uploadFile(filePath string) {
 	uploadFileInfo(fi)
 }
 
+//Note: http.DefaultClient is more robust than aws.RetryingClient
+//(which fails for me with a timeout for large files e.g. ~6MB)
+func getS3Client() *http.Client {
+	// return aws.RetryingClient
+	return http.DefaultClient
+}
+
+func s3GetBucket() *s3.Bucket {
+	s3BucketName := "kjkpub"
+	secrets := readSecretsMust()
+	auth := aws.Auth{
+		AccessKey: secrets.AwsAccess,
+		SecretKey: secrets.AwsSecret,
+	}
+	// Note: it's important that region is aws.USEast. This is where my bucket
+	// is and giving a different region will fail
+	s3Obj := s3.New(auth, aws.USEast, getS3Client())
+	return s3Obj.Bucket(s3BucketName)
+}
+
+// ETag gives the hex-encoded MD5 sum of the contents,
+// surrounded with double-quotes.
+func keyEtagToMd5Hex(s string) string {
+	res := strings.Trim(s, `"`)
+	fatalif(len(res) != 32, "len(res) = %d (should be 32)", len(res))
+	return res
+}
+
+func s3ListFilesMust() []*FileInS3 {
+	var res []*FileInS3
+	bucket := s3GetBucket()
+	delim := ""
+	marker := ""
+	for {
+		resp, err := bucket.List(s3Dir, delim, marker, MaxS3Results)
+		fataliferr(err)
+		for _, key := range resp.Contents {
+			fi := &FileInS3{}
+			fi.S3Path = key.Key
+			fi.Size = key.Size
+			fi.Md5Hex = keyEtagToMd5Hex(key.ETag)
+			fi.Sha1Hex = s3PathToSha1Hex(key.Key)
+			// TODO: get filename using func (b *Bucket) Head(path string, headers map[string][]string) (*http.Response, error)
+			// and x-amz-meta-name header.
+			// Cache locally because doing network call for each file will be
+			// expensive
+			res = append(res, fi)
+		}
+		if !resp.IsTruncated {
+			break
+		}
+		marker = resp.NextMarker
+	}
+	return res
+}
+
+func s3List() {
+	files := s3ListFilesMust()
+	fmt.Printf("%d files\n", len(files))
+	for _, fi := range files {
+		fmt.Printf("  %s, %d, '%s'\n", fi.S3Path, fi.Size, fi.Name)
+	}
+}
+
 func usageAndExit() {
 	fmt.Printf("s3 $fileOrDir ")
 }
@@ -287,7 +366,12 @@ func usageAndExit() {
 func main() {
 	flag.BoolVar(&flgPub, "pub", false, "should file be made public, short version")
 	flag.BoolVar(&flgPublic, "public", false, "should file be made public")
+	flag.BoolVar(&flgList, "list", false, "list files in s3")
 	flag.Parse()
+	if flgList {
+		s3List()
+		return
+	}
 	if 1 == len(flag.Args()) {
 		usageAndExit()
 	}

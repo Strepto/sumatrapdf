@@ -404,6 +404,7 @@ function sumatra_files()
     "RenderCache.*",
     "Search.*",
     "Selection.*",
+    "SettingsStructs.*",
     "SumatraAbout.*",
     "SumatraAbout2.*",
     "SumatraDialogs.*",
@@ -530,10 +531,6 @@ function engines_files()
 end
 
 function mupdf_files()
-  -- TODO:
-  -- .\ext\..\bin\nasm.exe -I .\mupdf\ -f win32 -o .\obj-rel\mupdf\font_base14.obj
-  -- .\mupdf\font_base14.asm
-
   files {
     "mupdf/font_base14.asm",
   }
@@ -728,6 +725,7 @@ function sumatrapdf_files()
   files {
     "src/SumatraPDF.cpp",
     "src/SumatraStartup.cpp",
+    "src/Tests.cpp",
     "src/SumatraPDF.rc",
   }
 end
@@ -782,9 +780,10 @@ function test_util_files()
   })
   files_in_dir("src", {
     --"AppTools.*",
-    --"ParseCommandLine.*",
     --"StressTesting.*",
     "AppUtil.*",
+    "ParseCommandLine.*",
+    "SettingsStructs.*",
     "UnitTests.cpp",
     "mui/SvgPath*",
     "tools/test_util.cpp"

@@ -45,6 +45,7 @@
 #include "WindowInfo.h"
 #include "TabInfo.h"
 #include "resource.h"
+#include "ParseCommandLine.h"
 #include "AppPrefs.h"
 #include "AppTools.h"
 #include "AppUtil.h"
@@ -147,9 +148,9 @@ void SetCurrentLang(const char *langCode)
 
 #ifndef SUMATRA_UPDATE_INFO_URL
 #ifdef SVN_PRE_RELEASE_VER
-#define SUMATRA_UPDATE_INFO_URL L"http://kjkpub.s3.amazonaws.com/sumatrapdf/sumpdf-prerelease-update.txt"
+#define SUMATRA_UPDATE_INFO_URL L"https://kjkpub.s3.amazonaws.com/sumatrapdf/sumpdf-prerelease-update.txt"
 #else
-#define SUMATRA_UPDATE_INFO_URL L"http://kjkpub.s3.amazonaws.com/sumatrapdf/sumpdf-update.txt"
+#define SUMATRA_UPDATE_INFO_URL L"https://kjkpub.s3.amazonaws.com/sumatrapdf/sumpdf-update.txt"
 #endif
 #endif
 
@@ -221,13 +222,13 @@ void InitializePolicies(bool restrict)
         const char *value;
         if ((value = polsec->GetValue("LinkProtocols")) != nullptr) {
             ScopedMem<WCHAR> protocols(str::conv::FromUtf8(value));
-            str::ToLower(protocols);
+            str::ToLowerInPlace(protocols);
             str::TransChars(protocols, L":; ", L",,,");
             gAllowedLinkProtocols.Split(protocols, L",", true);
         }
         if ((value = polsec->GetValue("SafeFileTypes")) != nullptr) {
             ScopedMem<WCHAR> protocols(str::conv::FromUtf8(value));
-            str::ToLower(protocols);
+            str::ToLowerInPlace(protocols);
             str::TransChars(protocols, L":; ", L",,,");
             gAllowedFileTypes.Split(protocols, L",", true);
         }
@@ -269,7 +270,7 @@ bool LaunchBrowser(const WCHAR *url)
     ScopedMem<WCHAR> protocol;
     if (!str::Parse(url, L"%S:", &protocol))
         return false;
-    str::ToLower(protocol);
+    str::ToLowerInPlace(protocol);
     if (!gAllowedLinkProtocols.Contains(protocol))
         return false;
 
@@ -289,7 +290,7 @@ bool OpenFileExternally(const WCHAR *path)
     // since we allow following hyperlinks, also allow opening local webpages
     if (str::EndsWithI(path, L".htm") || str::EndsWithI(path, L".html") || str::EndsWithI(path, L".xhtml"))
         perceivedType.Set(str::Dup(L"webpage"));
-    str::ToLower(perceivedType);
+    str::ToLowerInPlace(perceivedType);
     if (gAllowedFileTypes.Contains(L"*"))
         /* allow all file types (not recommended) */;
     else if (!perceivedType || !gAllowedFileTypes.Contains(perceivedType))
@@ -555,7 +556,7 @@ static void UpdateWindowRtlLayout(WindowInfo *win)
     if (tocVisible || favVisible)
         SetSidebarVisibility(win, false, false);
 
-    // cf. http://www.microsoft.com/middleeast/msdn/mirror.aspx
+    // cf. https://www.microsoft.com/middleeast/msdn/mirror.aspx
     ToggleWindowStyle(win->hwndFrame, WS_EX_LAYOUTRTL | WS_EX_NOINHERITLAYOUT, isRTL, GWL_EXSTYLE);
 
     ToggleWindowStyle(win->hwndTocBox, WS_EX_LAYOUTRTL | WS_EX_NOINHERITLAYOUT, isRTL, GWL_EXSTYLE);
@@ -871,6 +872,8 @@ LoadEngineInFixedPageUI:
                     return nullptr;
                 goto LoadEngineInFixedPageUI;
             }
+            // another ChmModel might still be active
+            chmModel->RemoveParentHwnd();
             ctrl = chmModel;
         }
         CrashIf(ctrl && (!ctrl->AsChm() || ctrl->AsFixed() || ctrl->AsEbook()));
@@ -1007,7 +1010,7 @@ static void LoadDocIntoCurrentTab(LoadArgs& args, Controller *ctrl, DisplayState
     win->linkOnLastButtonDown = nullptr;
 
     AssertCrash(!win->IsAboutWindow() && win->IsDocLoaded() == (win->ctrl != nullptr));
-    // TODO: http://code.google.com/p/sumatrapdf/issues/detail?id=1570
+    // TODO: https://code.google.com/p/sumatrapdf/issues/detail?id=1570
     if (win->ctrl) {
         if (win->AsFixed()) {
             DisplayModel *dm = win->AsFixed();
@@ -1029,7 +1032,9 @@ static void LoadDocIntoCurrentTab(LoadArgs& args, Controller *ctrl, DisplayState
                 win->uia_provider->OnDocumentLoad(dm);
         }
         else if (win->AsChm()) {
+            win->AsChm()->SetParentHwnd(win->hwndCanvas);
             win->ctrl->SetDisplayMode(displayMode);
+            ss.page = limitValue(ss.page, 1, win->ctrl->PageCount());
             win->ctrl->GoToPage(ss.page, false);
         }
         else if (win->AsEbook()) {
@@ -1151,6 +1156,7 @@ void ReloadDocument(WindowInfo *win, bool autorefresh)
     // we postpone the reload until the next autorefresh event
     if (!ctrl && autorefresh) {
         SetFrameTitleForTab(tab, true);
+        win::SetText(win->hwndFrame, tab->frameTitle);
         return;
     }
 
@@ -1863,7 +1869,7 @@ static DWORD ShowAutoUpdateDialog(HWND hParent, HttpRsp *rsp, bool silent)
     if (0 == data->Size())
         return ERROR_INTERNET_CONNECTION_ABORTED;
 
-    // See http://code.google.com/p/sumatrapdf/issues/detail?id=725
+    // See https://code.google.com/p/sumatrapdf/issues/detail?id=725
     // If a user configures os-wide proxy that is not regular ie proxy
     // (which we pick up) we might get complete garbage in response to
     // our query. Make sure to check whether the returned data is sane.
@@ -2583,7 +2589,7 @@ static void OnMenuSaveBookmark(WindowInfo& win)
 }
 
 #if 0
-// code adapted from http://support.microsoft.com/kb/131462/en-us
+// code adapted from https://support.microsoft.com/kb/131462/en-us
 static UINT_PTR CALLBACK FileOpenHook(HWND hDlg, UINT uiMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uiMsg) {
@@ -3486,7 +3492,7 @@ static void FrameOnChar(WindowInfo& win, WPARAM key, LPARAM info=0)
     case 'z':
         win.ToggleZoom();
         break;
-    // per http://en.wikipedia.org/wiki/Keyboard_layout
+    // per https://en.wikipedia.org/wiki/Keyboard_layout
     // almost all keyboard layouts allow to press either
     // '+' or '=' unshifted (and one of them is also often
     // close to '-'); the other two alternatives are for
@@ -4332,7 +4338,7 @@ void GetProgramInfo(str::Str<char>& s)
         s.Append(" 64-bit");
     }
 #ifdef DEBUG
-    if (!str::EndsWith(s.Get(), " (dbg)"))
+    if (!str::Find(s.Get(), " (dbg)"))
         s.Append(" (dbg)");
 #endif
     if (gPluginMode)
@@ -4350,7 +4356,7 @@ bool CrashHandlerCanUseNet()
     return HasPermission(Perm_InternetAccess);
 }
 
-void CrashHandlerMessage()
+void ShowCrashHandlerMessage()
 {
     // don't show a message box in restricted use, as the user most likely won't be
     // able to do anything about it anyway and it's up to the application provider

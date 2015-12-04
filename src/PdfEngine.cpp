@@ -239,83 +239,115 @@ void fz_stream_fingerprint(fz_stream *file, unsigned char digest[16])
     fz_drop_buffer(file->ctx, buffer);
 }
 
-static WCHAR *fz_text_page_to_str(fz_text_page *text, const WCHAR *lineSep, RectI **coordsOut=nullptr)
+static inline int wchars_per_rune(int rune)
+{
+    if (rune & 0x1F0000)
+        return 2;
+    return 1;
+}
+
+static void AddChar(fz_text_span *span, fz_text_char *c, str::Str<WCHAR>& s, Vec<RectI>& rects) {
+    fz_rect bbox;
+    fz_text_char_bbox(&bbox, span, c - span->text);
+    RectI r = fz_rect_to_RectD(bbox).Round();
+
+    int n = wchars_per_rune(c->c);
+    if (n == 2) {
+        WCHAR tmp[2];
+        tmp[0] = 0xD800 | ((c->c - 0x10000) >> 10) & 0x3FF;
+        tmp[1] = 0xDC00 | (c->c - 0x10000) & 0x3FF;
+        s.Append(tmp, 2);
+        rects.Append(r);
+        rects.Append(r);
+        return;
+    }
+    WCHAR wc = c->c;
+    bool isNonPrintable = (wc <= 32) || str::IsNonCharacter(wc);
+    if (!isNonPrintable) {
+        s.Append(wc);
+        rects.Append(r);
+        return;
+    }
+
+    // non-printable or whitespace
+    if (!str::IsWs(wc)) {
+        s.Append(L'?');
+        rects.Append(r);
+        return;
+    }
+
+    // collapse multiple whitespace characters into one
+    WCHAR prev = s.LastChar();
+    if (!str::IsWs(prev)) {
+        s.Append(L' ');
+        rects.Append(r);
+    }
+}
+
+// if there's a span following this one, add space to separate them
+static void AddSpaceAtSpanEnd(fz_text_span *span, str::Str<WCHAR>& s, Vec<RectI>& rects) {
+    if (span->len == 0 || span->next == NULL) {
+        return;
+    }
+    CrashIf(s.Count() == 0);
+    CrashIf(rects.Count() == 0);
+    if (s.LastChar() == ' ') {
+        return;
+    }
+    // TODO: use a Tab instead? (this might be a table)
+    s.Append(L' ');
+    RectI prev = rects.Last();
+    prev.x += prev.dx;
+    prev.dx /= 2;
+    rects.Append(prev);
+}
+
+static void AddLineSep(str::Str<WCHAR>& s, Vec<RectI>& rects, const WCHAR *lineSep, size_t lineSepLen) {
+    if (lineSepLen == 0) {
+        return;
+    }
+    // remove trailing spaces
+    if (str::IsWs(s.LastChar())) {
+        s.Pop();
+        rects.Pop();
+    }
+
+    s.Append(lineSep);
+    for (size_t i = 0; i < lineSepLen; i++) {
+        rects.Append(RectI());
+    }
+}
+
+
+static WCHAR *fz_text_page_to_str(fz_text_page *text, const WCHAR *lineSep, RectI **coordsOut)
 {
     size_t lineSepLen = str::Len(lineSep);
-    size_t textLen = 0;
-    for (fz_page_block *block = text->blocks; block < text->blocks + text->len; block++) {
-        if (block->type != FZ_PAGE_BLOCK_TEXT)
-            continue;
-        for (fz_text_line *line = block->u.text->lines; line < block->u.text->lines + block->u.text->len; line++) {
-            for (fz_text_span *span = line->first_span; span; span = span->next) {
-                textLen += span->len + 1;
-            }
-            textLen += lineSepLen - 1;
-        }
-    }
+    str::Str<WCHAR> content;
+    // coordsOut is optional but we ask for it by default so we simplify the code
+    // by always calculating it
+    Vec<RectI> rects;
 
-    WCHAR *content = AllocArray<WCHAR>(textLen + 1);
-    if (!content)
-        return nullptr;
-
-    RectI *destRect = nullptr;
-    if (coordsOut) {
-        destRect = *coordsOut = AllocArray<RectI>(textLen + 1);
-        if (!*coordsOut) {
-            free(content);
-            return nullptr;
-        }
-    }
-
-    WCHAR *dest = content;
     for (fz_page_block *block = text->blocks; block < text->blocks + text->len; block++) {
         if (block->type != FZ_PAGE_BLOCK_TEXT)
             continue;
         for (fz_text_line *line = block->u.text->lines; line < block->u.text->lines + block->u.text->len; line++) {
             for (fz_text_span *span = line->first_span; span; span = span->next) {
                 for (fz_text_char *c = span->text; c < span->text + span->len; c++) {
-                    *dest = c->c;
-                    if (*dest <= 32 || str::IsNonCharacter(*dest)) {
-                        if (!str::IsWs(*dest))
-                            *dest = '?';
-                        // collapse multiple whitespace characters into one
-                        else if (dest > content && !str::IsWs(dest[-1]))
-                            *dest = ' ';
-                        else
-                            continue;
-                    }
-                    dest++;
-                    if (destRect) {
-                        fz_rect bbox;
-                        fz_text_char_bbox(&bbox, span, c - span->text);
-                        *destRect++ = fz_rect_to_RectD(bbox).Round();
-                    }
+                    AddChar(span, c, content, rects);
                 }
-                if (span->len > 0 && span->next && dest > content && *dest != ' ') {
-                    // TODO: use a Tab instead? (this might be a table)
-                    *dest++ = ' ';
-                    if (destRect) {
-                        RectI prev = destRect[-1];
-                        prev.x += prev.dx;
-                        prev.dx /= 2;
-                        *destRect++ = prev;
-                    }
-                }
+                AddSpaceAtSpanEnd(span, content, rects);
             }
-            // remove trailing spaces
-            if (lineSepLen > 0 && dest > content && str::IsWs(dest[-1])) {
-                *--dest = '\0';
-                if (destRect)
-                    *--destRect = RectI();
-            }
-            lstrcpy(dest, lineSep);
-            dest += lineSepLen;
-            if (destRect)
-                destRect += lineSepLen;
+            AddLineSep(content, rects, lineSep, lineSepLen);
         }
     }
 
-    return content;
+    CrashIf(content.Count() != rects.Count());
+
+    if (coordsOut) {
+        *coordsOut = rects.StealData();
+    }
+
+    return content.StealData();
 }
 
 struct istream_filter {
@@ -946,7 +978,7 @@ WCHAR *FormatPageLabel(const char *type, int pageNo, const WCHAR *prefix)
         // roman numbering style
         ScopedMem<WCHAR> number(str::FormatRomanNumeral(pageNo));
         if (*type == 'r')
-            str::ToLower(number.Get());
+            str::ToLowerInPlace(number.Get());
         return str::Format(L"%s%s", prefix, number);
     }
     if (str::EqI(type, "A")) {
@@ -956,7 +988,7 @@ WCHAR *FormatPageLabel(const char *type, int pageNo, const WCHAR *prefix)
         for (int i = 0; i < (pageNo - 1) / 26; i++)
             number.Append(number.At(0));
         if (*type == 'a')
-            str::ToLower(number.Get());
+            str::ToLowerInPlace(number.Get());
         return str::Format(L"%s%s", prefix, number.Get());
     }
     return str::Dup(prefix);
@@ -2445,8 +2477,12 @@ bool PdfEngineImpl::IsLinearizedFile()
            pdf_is_int(pdf_dict_gets(obj, "T"));
 }
 
-static void pdf_extract_fonts(pdf_obj *res, Vec<pdf_obj *>& fontList)
+static void pdf_extract_fonts(pdf_obj *res, Vec<pdf_obj *>& fontList, Vec<pdf_obj *>& resList)
 {
+    if (!res || pdf_mark_obj(res))
+        return;
+    resList.Append(res);
+
     pdf_obj *fonts = pdf_dict_gets(res, "Font");
     for (int k = 0; k < pdf_dict_len(fonts); k++) {
         pdf_obj *font = pdf_resolve_indirect(pdf_dict_get_val(fonts, k));
@@ -2458,16 +2494,14 @@ static void pdf_extract_fonts(pdf_obj *res, Vec<pdf_obj *>& fontList)
     for (int k = 0; k < pdf_dict_len(xobjs); k++) {
         pdf_obj *xobj = pdf_dict_get_val(xobjs, k);
         pdf_obj *xres = pdf_dict_gets(xobj, "Resources");
-        if (xobj && xres && !pdf_mark_obj(xobj)) {
-            pdf_extract_fonts(xres, fontList);
-            pdf_unmark_obj(xobj);
-        }
+        pdf_extract_fonts(xres, fontList, resList);
     }
 }
 
 WCHAR *PdfEngineImpl::ExtractFontList()
 {
     Vec<pdf_obj *> fontList;
+    Vec<pdf_obj *> resList;
 
     // collect all fonts from all page objects
     for (int i = 1; i <= PageCount(); i++) {
@@ -2475,17 +2509,23 @@ WCHAR *PdfEngineImpl::ExtractFontList()
         if (page) {
             ScopedCritSec scope(&ctxAccess);
             fz_try(ctx) {
-                pdf_extract_fonts(page->resources, fontList);
+                pdf_extract_fonts(page->resources, fontList, resList);
                 for (pdf_annot *annot = page->annots; annot; annot = annot->next) {
                     if (annot->ap)
-                        pdf_extract_fonts(annot->ap->resources, fontList);
+                        pdf_extract_fonts(annot->ap->resources, fontList, resList);
                 }
             }
             fz_catch(ctx) { }
         }
     }
 
+    // start ctxAccess scope here so that we don't also have to
+    // ask for pagesAccess (as is required for GetPdfPage)
     ScopedCritSec scope(&ctxAccess);
+
+    for (pdf_obj *res : resList) {
+        pdf_unmark_obj(res);
+    }
 
     WStrVec fonts;
     for (size_t i = 0; i < fontList.Count(); i++) {

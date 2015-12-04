@@ -5,32 +5,25 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
-	"mime"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/goamz/goamz/aws"
-	"github.com/goamz/goamz/s3"
 )
 
 /*
 To run:
 * install Go
- - download and run latest installer http://golang.org/doc/install
+ - download and run latest installer https://golang.org/doc/install
  - restart so that PATH changes take place
  - set GOPATH env variable (e.g. to %USERPROFILE%\src\go)
  - install goamz: go get github.com/goamz/goamz/s3
-* go run .\tools\buildgo\main.go
+* see scripts\build-release.bat for how to run it
 */
 
 /*
@@ -48,16 +41,10 @@ type Secrets struct {
 	TranslationUploadSecret string
 }
 
-// Timing records how long something took to execute
-type Timing struct {
-	Duration time.Duration
-	What     string
-}
-
 const (
-	s3PreRelDir = "sumatrapdf/prerel/"
-	s3RelDir    = "sumatrapdf/rel/"
-	logFileName = "build-log.txt"
+	s3PreRelDir  = "sumatrapdf/prerel/"
+	s3RelDir     = "sumatrapdf/rel/"
+	maxS3Results = 1000
 )
 
 var (
@@ -68,73 +55,21 @@ var (
 	flgListS3        bool
 	flgAnalyze       bool
 	flgNoCleanCheck  bool
-	svnPreReleaseVer int
+	svnPreReleaseVer string
 	gitSha1          string
 	sumatraVersion   string
 	timeStart        time.Time
 	cachedSecrets    *Secrets
-	timings          []Timing
-	logFile          *os.File
-	inFatal          bool
 )
 
-// Note: it can say is 32bit on 64bit machine (if 32bit toolset is installed),
-// but it'll never say it's 64bit if it's 32bit
-func isOS64Bit() bool {
-	return runtime.GOARCH == "amd64"
-}
-
-func logToFile(s string) {
-	if logFile == nil {
-		var err error
-		logFile, err = os.Create(logFileName)
-		if err != nil {
-			fmt.Printf("logToFile: os.Create('%s') failed with %s\n", logFileName, err)
-			os.Exit(1)
-		}
+func finalizeThings(crashed bool) {
+	revertBuildConfig()
+	if !crashed {
+		printTimings()
+		fmt.Printf("total time: %s\n", time.Since(timeStart))
+		logToFile(fmt.Sprintf("total time: %s\n", time.Since(timeStart)))
 	}
-	logFile.WriteString(s)
-}
-
-func closeLogFile() {
-	if logFile != nil {
-		logFile.Close()
-		logFile = nil
-	}
-}
-
-func appendTiming(dur time.Duration, what string) {
-	t := Timing{
-		Duration: dur,
-		What:     what,
-	}
-	timings = append(timings, t)
-}
-
-func printTimings() {
-	for _, t := range timings {
-		fmt.Printf("%s\n    %s\n", t.Duration, t.What)
-		logToFile(fmt.Sprintf("%s\n    %s\n", t.Duration, t.What))
-	}
-}
-
-func printStack() {
-	buf := make([]byte, 1024*164)
-	n := runtime.Stack(buf, false)
-	fmt.Printf("%s", buf[:n])
-}
-
-func cmdToStrLong(cmd *exec.Cmd) string {
-	arr := []string{cmd.Path}
-	arr = append(arr, cmd.Args...)
-	return strings.Join(arr, " ")
-}
-
-func cmdToStr(cmd *exec.Cmd) string {
-	s := filepath.Base(cmd.Path)
-	arr := []string{s}
-	arr = append(arr, cmd.Args...)
-	return strings.Join(arr, " ")
+	closeLogFile()
 }
 
 func readSecretsMust() *Secrets {
@@ -153,370 +88,6 @@ func readSecretsMust() *Secrets {
 
 func revertBuildConfig() {
 	runExe("git", "checkout", buildConfigPath())
-}
-
-func finalizeThings(crashed bool) {
-	revertBuildConfig()
-	if !crashed {
-		printTimings()
-		fmt.Printf("total time: %s\n", time.Since(timeStart))
-		logToFile(fmt.Sprintf("total time: %s\n", time.Since(timeStart)))
-	}
-	closeLogFile()
-}
-
-func fatalf(format string, args ...interface{}) {
-	fmt.Printf(format, args...)
-	printStack()
-	finalizeThings(true)
-	os.Exit(1)
-}
-
-func fatalif(cond bool, format string, args ...interface{}) {
-	if cond {
-		if inFatal {
-			os.Exit(1)
-		}
-		inFatal = true
-		fmt.Printf(format, args...)
-		printStack()
-		finalizeThings(true)
-		os.Exit(1)
-	}
-}
-
-func fataliferr(err error) {
-	if err != nil {
-		fatalf("%s\n", err.Error())
-	}
-}
-
-func pj(elem ...string) string {
-	return filepath.Join(elem...)
-}
-
-func replaceExt(path string, newExt string) string {
-	ext := filepath.Ext(path)
-	return path[0:len(path)-len(ext)] + newExt
-}
-
-func fileExists(path string) bool {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return fi.Mode().IsRegular()
-}
-
-func getEnvAfterScript(dir, script string) []string {
-	// TODO: maybe use COMSPEC env variable instead of "cmd.exe" (more robust)
-	cmd := exec.Command("cmd.exe", "/c", script+" & set")
-	cmd.Dir = dir
-	fmt.Printf("Executing: %s in %s\n", cmd.Args, cmd.Dir)
-	resBytes, err := cmd.Output()
-	if err != nil {
-		fatalf("failed with %s\n", err)
-	}
-	res := string(resBytes)
-	parts := strings.Split(res, "\n")
-	if len(parts) == 1 {
-		fatalf("split failed\nres:\n%s\n", res)
-	}
-	for idx, env := range parts {
-		parts[idx] = strings.TrimSpace(env)
-	}
-	return parts
-}
-
-func getEnvValue(env []string, name string) (string, bool) {
-	for _, v := range env {
-		parts := strings.SplitN(v, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if strings.EqualFold(name, parts[0]) {
-			return parts[1], true
-		}
-	}
-	return "", false
-}
-
-func getOsEnvValue(name string) (string, bool) {
-	return getEnvValue(os.Environ(), name)
-}
-
-func getEnvForVSUncached() []string {
-	val, ok := getOsEnvValue("VS140COMNTOOLS")
-	if !ok {
-		fatalf("VS140COMNTOOLS not set; VS 2015 not installed?\n")
-	}
-	return getEnvAfterScript(val, "vsvars32.bat")
-}
-
-var (
-	envForVSCached []string
-)
-
-func getPaths(env []string) []string {
-	path, ok := getEnvValue(env, "path")
-	fatalif(!ok, "")
-	sep := string(os.PathListSeparator)
-	parts := strings.Split(path, sep)
-	for i, s := range parts {
-		parts[i] = strings.TrimSpace(s)
-	}
-	return parts
-}
-
-func dumpEnv(env []string) {
-	for _, e := range env {
-		fmt.Printf("%s\n", e)
-	}
-	paths := getPaths(env)
-	fmt.Printf("PATH:\n  %s\n", strings.Join(paths, "\n  "))
-}
-
-func getEnvForVS() []string {
-	if envForVSCached == nil {
-		envForVSCached = getEnvForVSUncached()
-		//dumpEnv(envForVSCached)
-	}
-	return envForVSCached
-}
-
-func toTrimmedLines(d []byte) []string {
-	lines := strings.Split(string(d), "\n")
-	i := 0
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		// remove empty lines
-		if len(l) > 0 {
-			lines[i] = l
-			i++
-		}
-	}
-	return lines[:i]
-}
-
-func fileSizeMust(path string) int64 {
-	fi, err := os.Stat(path)
-	fataliferr(err)
-	return fi.Size()
-}
-
-func fileCopyMust(dst, src string) {
-	in, err := os.Open(src)
-	fataliferr(err)
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	fataliferr(err)
-
-	_, err = io.Copy(out, in)
-	cerr := out.Close()
-	fataliferr(err)
-	fataliferr(cerr)
-}
-
-func lookExeInEnvPathUncachedHelper(env []string, exeName string) string {
-	var found []string
-	paths := getPaths(env)
-	for _, dir := range paths {
-		path := filepath.Join(dir, exeName)
-		if fileExists(path) {
-			found = append(found, path)
-		}
-	}
-	if len(found) == 0 {
-		return ""
-	}
-	if len(found) == 1 {
-		return found[0]
-	}
-	// HACK: for msbuild.exe we might find 3 locations, prefer the one for
-	// 2015 VS. If we pick up 2013 VS, it'll complain about v140_xp toolset
-	// not being installed
-	for _, p := range found {
-		if strings.Contains(p, "14.0") {
-			return p
-		}
-	}
-	return found[0]
-}
-
-func lookExeInEnvPathUncached(env []string, exeName string) string {
-	var err error
-	fmt.Printf("lookExeInEnvPathUncached: exeName=%s\n", exeName)
-	path := lookExeInEnvPathUncachedHelper(env, exeName)
-	if path == "" && filepath.Ext(exeName) == "" {
-		path = lookExeInEnvPathUncachedHelper(env, exeName+".exe")
-	}
-	//panic(fmt.Sprintf("didn't find %s in %s\n", exeName, getPaths(env)))
-	if path == "" {
-		path, err = exec.LookPath(exeName)
-	}
-	fataliferr(err)
-	fatalif(path == "", "didn't find %s in %s\n", exeName, getPaths(env))
-	fmt.Printf("found %v for %s\n", path, exeName)
-	return path
-}
-
-func lookExeInEnvPath(env []string, exeName string) string {
-	var exePath string
-	var err error
-	if false {
-		exePath, err = exec.LookPath(exeName)
-		if err != nil {
-			exePath = lookExeInEnvPathUncached(env, exeName)
-		}
-	} else {
-		exePath = lookExeInEnvPathUncached(env, exeName)
-	}
-	return exePath
-}
-
-func getCmdInEnv(env []string, exeName string, args ...string) *exec.Cmd {
-	if env == nil {
-		env = os.Environ()
-	}
-	exePath := lookExeInEnvPath(env, exeName)
-	cmd := exec.Command(exePath, args...)
-	cmd.Env = env
-	if true {
-		fmt.Printf("Running %s\n", cmd.Args)
-	}
-	return cmd
-}
-
-func getCmd(exeName string, args ...string) *exec.Cmd {
-	return getCmdInEnv(nil, exeName, args...)
-}
-
-func logCmdResult(cmd *exec.Cmd, out []byte, err error) {
-	var s string
-	if err != nil {
-		s = fmt.Sprintf("%s failed with %s, out:\n%s\n\n", cmdToStr(cmd), err, string(out))
-	} else {
-		s = fmt.Sprintf("%s\n%s\n\n", cmdToStr(cmd), string(out))
-	}
-	logToFile(s)
-}
-
-func runCmd(cmd *exec.Cmd, showProgress bool) ([]byte, error) {
-	timeStart := time.Now()
-	if !showProgress {
-		res, err := cmd.CombinedOutput()
-		appendTiming(time.Since(timeStart), cmdToStr(cmd))
-		logCmdResult(cmd, res, err)
-		return res, err
-	}
-	var resOut, resErr []byte
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-	cmd.Start()
-
-	go func() {
-		buf := make([]byte, 1024, 1024)
-		for {
-			n, err := stdout.Read(buf)
-			if err != nil {
-				break
-			}
-			if n > 0 {
-				d := buf[:n]
-				resOut = append(resOut, d...)
-				os.Stdout.Write(d)
-			}
-		}
-	}()
-
-	go func() {
-		buf := make([]byte, 1024, 1024)
-		for {
-			n, err := stderr.Read(buf)
-			if err != nil {
-				break
-			}
-			if n > 0 {
-				d := buf[:n]
-				resErr = append(resErr, d...)
-				os.Stderr.Write(d)
-			}
-		}
-	}()
-	err := cmd.Wait()
-	appendTiming(time.Since(timeStart), cmdToStr(cmd))
-	resOut = append(resOut, resErr...)
-	logCmdResult(cmd, resOut, err)
-	return resOut, err
-}
-
-func runCmdMust(cmd *exec.Cmd, showProgress bool) {
-	_, err := runCmd(cmd, showProgress)
-	fataliferr(err)
-}
-
-func runCmdLogged(cmd *exec.Cmd, showProgress bool) ([]byte, error) {
-	out, err := runCmd(cmd, showProgress)
-	if err != nil {
-		args := []string{cmd.Path}
-		args = append(args, cmd.Args...)
-		fmt.Printf("%s failed with %s, out:\n%s\n", args, err, string(out))
-		return out, err
-	}
-	fmt.Printf("%s\n", out)
-	return out, nil
-}
-
-func runExe(exeName string, args ...string) ([]byte, error) {
-	cmd := getCmd(exeName, args...)
-	return runCmd(cmd, false)
-}
-
-func runExeInEnv(env []string, exeName string, args ...string) ([]byte, error) {
-	cmd := getCmdInEnv(env, exeName, args...)
-	return runCmd(cmd, false)
-}
-
-func runExeMust(exeName string, args ...string) []byte {
-	out, err := runExeInEnv(os.Environ(), exeName, args...)
-	fataliferr(err)
-	return out
-}
-
-func runExeLogged(env []string, exeName string, args ...string) ([]byte, error) {
-	out, err := runExeInEnv(env, exeName, args...)
-	if err != nil {
-		fmt.Printf("%s failed with %s, out:\n%s\n", args, err, string(out))
-		return out, err
-	}
-	fmt.Printf("%s\n", out)
-	return out, nil
-}
-
-func runMsbuild(showProgress bool, args ...string) error {
-	cmd := getCmdInEnv(getEnvForVS(), "msbuild.exe", args...)
-	_, err := runCmdLogged(cmd, showProgress)
-	return err
-}
-
-func runMsbuildGetOutput(showProgress bool, args ...string) ([]byte, error) {
-	cmd := getCmdInEnv(getEnvForVS(), "msbuild.exe", args...)
-	return runCmdLogged(cmd, showProgress)
-}
-
-func isNum(s string) bool {
-	_, err := strconv.Atoi(s)
-	return err == nil
-}
-
-// Version must be in format x.y.z
-func verifyCorrectVersionMust(ver string) {
-	parts := strings.Split(ver, ".")
-	fatalif(len(parts) == 0 || len(parts) > 3, "%s is not a valid version number", ver)
-	for _, part := range parts {
-		fatalif(!isNum(part), "%s is not a valid version number", ver)
-	}
 }
 
 func extractSumatraVersionMust() string {
@@ -547,23 +118,11 @@ func getGitLinearVersionMust() int {
 	return n
 }
 
-func isGitCleanMust() bool {
-	out, err := runExe("git", "status", "--porcelain")
-	fataliferr(err)
-	s := strings.TrimSpace(string(out))
-	return len(s) == 0
-}
-
 func verifyGitCleanMust() {
-	fatalif(!isGitCleanMust(), "git has unsaved changes\n")
-}
-
-func getGitSha1Must() string {
-	out, err := runExe("git", "rev-parse", "HEAD")
-	fataliferr(err)
-	s := strings.TrimSpace(string(out))
-	fatalif(len(s) != 40, "getGitSha1Must(): %s doesn't look like sha1\n", s)
-	return s
+	if flgNoCleanCheck {
+		return
+	}
+	fatalif(!isGitClean(), "git has unsaved changes\n")
 }
 
 func verifyStartedInRightDirectoryMust() {
@@ -579,23 +138,32 @@ func certPath() string {
 	return pj("scripts", "cert.pfx")
 }
 
-func setBuildConfig(preRelVer int, sha1 string) {
-	s := fmt.Sprintf("#define SVN_PRE_RELEASE_VER %d\n", preRelVer)
-	s += fmt.Sprintf("#define GIT_COMMIT_ID %s\n", sha1)
+func setBuildConfig(sha1, preRelVer string) {
+	fatalif(sha1 == "", "sha1 must be set")
+	s := fmt.Sprintf("#define GIT_COMMIT_ID %s\n", sha1)
+	if preRelVer != "" {
+		s += fmt.Sprintf("#define SVN_PRE_RELEASE_VER %s\n", preRelVer)
+	}
 	err := ioutil.WriteFile(buildConfigPath(), []byte(s), 644)
 	fataliferr(err)
 }
 
-// we shouldn't re-upload files. We upload manifest-${rel}.txt last, so we
+// we shouldn't re-upload files. We upload manifest-${ver}.txt last, so we
 // consider a pre-release build already present in s3 if manifest file exists
-func verifyPreReleaseNotInS3Must(preReleaseVer int) {
-	s3Path := fmt.Sprintf("%smanifest-%d.txt", s3PreRelDir, preReleaseVer)
-	fatalif(s3Exists(s3Path), "build %d already exists in s3 because '%s' exists\n", preReleaseVer, s3Path)
+func verifyPreReleaseNotInS3Must(ver string) {
+	if !flgUpload {
+		return
+	}
+	s3Path := s3PreRelDir + fmt.Sprintf("SumatraPDF-prerelease-%s-manifest.txt", ver)
+	fatalif(s3Exists(s3Path), "build %d already exists in s3 because '%s' exists\n", ver, s3Path)
 }
 
-func verifyReleaseNotInS3Must(sumatraVersion string) {
-	s3Path := fmt.Sprintf("%sSuamtraPDF-%sinstall.exe", s3RelDir, sumatraVersion)
-	fatalif(s3Exists(s3Path), "build '%s' already exists in s3 because '%s' existst\n", sumatraVersion, s3Path)
+func verifyReleaseNotInS3Must(ver string) {
+	if !flgUpload {
+		return
+	}
+	s3Path := s3RelDir + fmt.Sprintf("SumatraPDF-%s-manifest.txt", ver)
+	fatalif(s3Exists(s3Path), "build '%s' already exists in s3 because '%s' existst\n", ver, s3Path)
 }
 
 // check we have cert for signing and s3 creds for file uploads
@@ -606,8 +174,7 @@ func verifyHasReleaseSecretsMust() {
 	fatalif(secrets.CertPwd == "", "CertPwd missing in %s\n", p)
 
 	if flgUpload {
-		fatalif(secrets.AwsSecret == "", "AwsSecret missing in %s\n", p)
-		fatalif(secrets.AwsAccess == "", "AwsAccess missing in %s\n", p)
+		s3SetSecrets(secrets.AwsAccess, secrets.AwsSecret)
 	}
 }
 
@@ -626,6 +193,75 @@ var (
 		"SumatraPDF-no-MuPDF.pdb", "SumatraPDF.pdb"}
 )
 
+func addZipFileMust(w *zip.Writer, path string) {
+	fi, err := os.Stat(path)
+	fataliferr(err)
+	fih, err := zip.FileInfoHeader(fi)
+	fataliferr(err)
+	fih.Name = filepath.Base(path)
+	fih.Method = zip.Deflate
+	d, err := ioutil.ReadFile(path)
+	fataliferr(err)
+	fw, err := w.CreateHeader(fih)
+	fataliferr(err)
+	_, err = fw.Write(d)
+	fataliferr(err)
+	// fw is just a io.Writer so we can't Close() it. It's not necessary as
+	// it's implicitly closed by the next Create(), CreateHeader()
+	// or Close() call on zip.Writer
+}
+
+func createExeZipWithGoMust(dir string) {
+	path := pj(dir, "SumatraPDF.zip")
+	f, err := os.Create(path)
+	fataliferr(err)
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	addZipFileMust(zw, pj(dir, "SumatraPDF.exe"))
+	err = zw.Close()
+	fataliferr(err)
+}
+
+func createExeZipWithPigz(dir string) {
+	srcFile := "SumatraPDF.exe"
+	srcPath := filepath.Join(dir, srcFile)
+	fatalif(!fileExists(srcPath), "file '%s' doesn't exist\n", srcPath)
+
+	// this is the file that pigz.exe will create
+	dstFileTmp := "SumatraPDF.exe.zip"
+	dstPathTmp := filepath.Join(dir, dstFileTmp)
+	removeFileMust(dstPathTmp)
+
+	// this is the file we want at the end
+	dstFile := "SumatraPDF.zip"
+	dstPath := filepath.Join(dir, dstFile)
+	removeFileMust(dstPath)
+
+	wd, err := os.Getwd()
+	fataliferr(err)
+	pigzExePath := filepath.Join(wd, "bin", "pigz.exe")
+	fatalif(!fileExists(pigzExePath), "file '%s' doesn't exist\n", pigzExePath)
+	cmd := exec.Command(pigzExePath, "-11", "--keep", "--zip", srcFile)
+	// in pigz we don't control the name of the file created inside so
+	// so when we run pigz the current directory is the same as
+	// the directory with the file we're compressing
+	cmd.Dir = dir
+	fmt.Printf("Running %s\n", cmd.Args)
+	_, err = runCmd(cmd, true)
+	fataliferr(err)
+
+	fatalif(!fileExists(dstPathTmp), "file '%s' doesn't exist\n", dstPathTmp)
+	err = os.Rename(dstPathTmp, dstPath)
+	fataliferr(err)
+}
+
+// createExeZipWithGoMust() is faster, createExeZipWithPigz() generates slightly
+// smaller files
+func createExeZipMust(dir string) {
+	//createExeZipWithGoMust(dir)
+	createExeZipWithPigz(dir)
+}
+
 func createPdbZipMust(dir string) {
 	path := pj(dir, "SumatraPDF.pdb.zip")
 	f, err := os.Create(path)
@@ -634,13 +270,7 @@ func createPdbZipMust(dir string) {
 	w := zip.NewWriter(f)
 
 	for _, file := range pdbFiles {
-		path = pj(dir, file)
-		d, err := ioutil.ReadFile(path)
-		fataliferr(err)
-		f, err := w.Create(file)
-		fataliferr(err)
-		_, err = f.Write(d)
-		fataliferr(err)
+		addZipFileMust(w, pj(dir, file))
 	}
 
 	err = w.Close()
@@ -665,15 +295,16 @@ func createPdbLzsaMust(dir string) {
 func buildPreRelease() {
 	var err error
 
-	fmt.Printf("Building pre-release version\n")
-	if !flgNoCleanCheck {
-		verifyGitCleanMust()
-	}
+	fmt.Printf("Building pre-release version %s\n", svnPreReleaseVer)
+	verifyGitCleanMust()
+	verifyOnMasterBranchMust()
 	verifyPreReleaseNotInS3Must(svnPreReleaseVer)
 
-	downloadTranslations()
+	verifyTranslationsMust()
 
-	setBuildConfig(svnPreReleaseVer, gitSha1)
+	downloadPigzMust()
+
+	setBuildConfig(gitSha1, svnPreReleaseVer)
 	err = runMsbuild(true, "vs2015\\SumatraPDF.sln", "/t:SumatraPDF;SumatraPDF-no-MUPDF;Uninstaller;test_util", "/p:Configuration=Release;Platform=Win32", "/m")
 	fataliferr(err)
 	runTestUtilMust("rel")
@@ -684,7 +315,6 @@ func buildPreRelease() {
 	fataliferr(err)
 	signMust(pj("rel", "Installer.exe"))
 
-	setBuildConfig(svnPreReleaseVer, gitSha1)
 	err = runMsbuild(true, "vs2015\\SumatraPDF.sln", "/t:SumatraPDF;SumatraPDF-no-MUPDF;Uninstaller;test_util", "/p:Configuration=Release;Platform=x64", "/m")
 	fataliferr(err)
 
@@ -705,10 +335,15 @@ func buildPreRelease() {
 	createPdbLzsaMust("rel64")
 
 	createManifestMust()
-	if flgUpload {
-		s3DeleteOldestPreRel()
-		s3UploadPreReleaseMust()
-	}
+	s3UploadPreReleaseMust(svnPreReleaseVer)
+}
+
+// TOOD: alternatively, just puts pigz.exe in the repo
+func downloadPigzMust() {
+	uri := "https://kjkpub.s3.amazonaws.com/software/pigz/2.3.1-149/pigz.exe"
+	path := pj("bin", "pigz.exe")
+	sha1 := "10a2d3e3cafbad083972d6498fee4dc7df603c04"
+	httpDlToFileMust(uri, path, sha1)
 }
 
 func buildRelease() {
@@ -717,12 +352,13 @@ func buildRelease() {
 	fmt.Printf("Building release version %s\n", sumatraVersion)
 	verifyGitCleanMust()
 	verifyOnReleaseBranchMust()
-
 	verifyReleaseNotInS3Must(sumatraVersion)
 
-	//TODO: not sure if should download translations
-	downloadTranslations()
+	verifyTranslationsMust()
 
+	downloadPigzMust()
+
+	setBuildConfig(gitSha1, "")
 	err = runMsbuild(true, "vs2015\\SumatraPDF.sln", "/t:SumatraPDF;SumatraPDF-no-MUPDF;Uninstaller;test_util", "/p:Configuration=Release;Platform=Win32", "/m")
 	fataliferr(err)
 	runTestUtilMust("rel")
@@ -746,6 +382,9 @@ func buildRelease() {
 	fataliferr(err)
 	signMust(pj("rel64", "Installer.exe"))
 
+	createExeZipMust("rel")
+	createExeZipMust("rel64")
+
 	createPdbZipMust("rel")
 	createPdbZipMust("rel64")
 
@@ -753,229 +392,7 @@ func buildRelease() {
 	createPdbLzsaMust("rel64")
 
 	createManifestMust()
-	if flgUpload {
-		s3UploadReleaseMust()
-	}
-}
-
-// AnalyzeLine has info about a warning line from prefast/analyze build
-// Given:
-//
-// c:\users\kjk\src\sumatrapdf\ext\unarr\rar\uncompress-rar.c(171): warning C6011:
-// Dereferencing NULL pointer 'code->table'. : Lines: 163, 165, 169, 170,
-// 171 [C:\Users\kjk\src\sumatrapdf\vs2015\Installer.vcxproj]
-//
-// FilePath will be: "ext\unarr\rar\uncompress-rar.c"
-// LineNo will be: 171
-// Message will be: warning C6011: Dereferencing NULL pointer 'code->table'. : Lines: 163, 165, 169, 170, 171
-type AnalyzeLine struct {
-	FilePath string
-	LineNo   int
-	Message  string
-	OrigLine string
-}
-
-// ByPathLine is to sort AnalyzeLine by file path then by line number
-type ByPathLine []*AnalyzeLine
-
-func (s ByPathLine) Len() int {
-	return len(s)
-}
-func (s ByPathLine) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-func (s ByPathLine) Less(i, j int) bool {
-	if s[i].FilePath == s[j].FilePath {
-		return s[i].LineNo < s[j].LineNo
-	}
-	return s[i].FilePath < s[j].FilePath
-}
-
-var (
-	currDirLenCached int
-)
-
-func currDirLen() int {
-	if currDirLenCached == 0 {
-		dir, err := os.Getwd()
-		fataliferr(err)
-		currDirLenCached = len(dir)
-	}
-	return currDirLenCached
-}
-
-func pre(s string) string {
-	return `<pre style="white-space: pre-wrap;">` + s + `</pre>`
-}
-
-func a(url, txt string) string {
-	return fmt.Sprintf(`<a href="%s">%s</a>`, url, txt)
-}
-
-//https://github.com/sumatrapdfreader/sumatrapdf/blob/c760b1996bec63c0bd9b2910b0811c41ed26db60/premake5.lua
-func htmlizeSrcLink(al *AnalyzeLine, gitVersion string) string {
-	path := strings.Replace(al.FilePath, "\\", "/", -1)
-	lineNo := al.LineNo
-	uri := fmt.Sprintf("https://github.com/sumatrapdfreader/sumatrapdf/blob/%s/%s#L%d", gitSha1, path, lineNo)
-	txt := fmt.Sprintf("%s(%d)", al.FilePath, lineNo)
-	return a(uri, txt)
-}
-
-func htmlizeErrorLines(errors []*AnalyzeLine) ([]string, []string, []string) {
-	var sumatraErrors, mupdfErrors, extErrors []string
-	for _, al := range errors {
-		s := htmlizeSrcLink(al, gitSha1) + " : " + al.Message
-		path := al.FilePath
-		if strings.HasPrefix(path, "src") {
-			sumatraErrors = append(sumatraErrors, s)
-		} else if strings.HasPrefix(path, "mupdf") {
-			mupdfErrors = append(mupdfErrors, s)
-		} else if strings.HasPrefix(path, "ext") {
-			extErrors = append(extErrors, s)
-		} else {
-			extErrors = append(extErrors, s)
-		}
-	}
-	return sumatraErrors, mupdfErrors, extErrors
-}
-
-func genAnalyzeHTML(errors []*AnalyzeLine) string {
-	sumatraErrors, mupdfErrors, extErrors := htmlizeErrorLines(errors)
-	nSumatraErrors := len(sumatraErrors)
-	nMupdfErrors := len(mupdfErrors)
-	nExtErrors := len(extErrors)
-
-	res := []string{"<html>", "<body>"}
-
-	homeLink := a("../index.html", "Home")
-	commitLink := a("https://github.com/sumatrapdfreader/sumatrapdf/commit/"+gitSha1, gitSha1)
-	s := fmt.Sprintf("%s: commit %s, %d warnings in sumatra code, %d in mupdf, %d in ext:", homeLink, commitLink, nSumatraErrors, nMupdfErrors, nExtErrors)
-	res = append(res, s)
-
-	s = pre(strings.Join(sumatraErrors, "\n"))
-	res = append(res, s)
-
-	res = append(res, "<p>Warnings in mupdf code:</p>")
-	s = pre(strings.Join(mupdfErrors, "\n"))
-	res = append(res, s)
-
-	res = append(res, "<p>Warnings in ext code:</p>")
-	s = pre(strings.Join(extErrors, "\n"))
-	res = append(res, s)
-
-	res = append(res, "</pre>")
-	res = append(res, "</body>", "</html>")
-	return strings.Join(res, "\n")
-}
-
-func parseAnalyzeLine(s string) AnalyzeLine {
-	sOrig := s
-	// remove " [C:\Users\kjk\src\sumatrapdf\vs2015\Installer.vcxproj]" from the end
-	end := strings.LastIndex(s, " [")
-	fatalif(end == -1, "invalid line '%s'\n", sOrig)
-	s = s[:end]
-	parts := strings.SplitN(s, "): ", 2)
-	fatalif(len(parts) != 2, "invalid line '%s'\n", sOrig)
-	res := AnalyzeLine{
-		OrigLine: sOrig,
-		Message:  parts[1],
-	}
-	s = parts[0]
-	end = strings.LastIndex(s, "(")
-	fatalif(end == -1, "invalid line '%s'\n", sOrig)
-	// change
-	// c:\users\kjk\src\sumatrapdf\ext\unarr\rar\uncompress-rar.c
-	// =>
-	// ext\unarr\rar\uncompress-rar.c
-	path := s[:end]
-	// sometimes the line starts with:
-	// 11>c:\users\kjk\src\sumatrapdf\ext\bzip2\bzlib.c(238)
-	start := strings.Index(path, ">")
-	if start != -1 {
-		path = path[start+1:]
-	}
-	start = currDirLen() + 1
-	res.FilePath = path[start:]
-	n, err := strconv.Atoi(s[end+1:])
-	fataliferr(err)
-	res.LineNo = n
-	return res
-}
-
-func isSrcFile(name string) bool {
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
-	case ".cpp", ".c", ".h":
-		return true
-	}
-	return false
-}
-
-// the compiler prints file names lower cased, we want real name in file system
-// (otherwise e.g. links to github break)
-func fixFileNames(a []*AnalyzeLine) {
-	fmt.Printf("fixFileNames\n")
-	files := make(map[string]string)
-	filepath.Walk(".", func(path string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !isSrcFile(path) {
-			return nil
-		}
-		//fmt.Printf("path: '%s', name: '%s'\n", path, fi.Name())
-		pathLower := strings.ToLower(path)
-		files[pathLower] = path
-		return nil
-	})
-	for _, al := range a {
-		if sub := files[al.FilePath]; sub != "" {
-			al.FilePath = sub
-		}
-	}
-}
-
-func parseAnalyzeOutput(d []byte) {
-	lines := toTrimmedLines(d)
-	var warnings []string
-	for _, line := range lines {
-		if strings.Contains(line, ": warning C") {
-			warnings = append(warnings, line)
-		}
-	}
-
-	seen := make(map[string]bool)
-	var deDuped []*AnalyzeLine
-	for _, s := range warnings {
-		al := parseAnalyzeLine(s)
-		full := fmt.Sprintf("%s, %d, %s\n", al.FilePath, al.LineNo, al.Message)
-		if !seen[full] {
-			deDuped = append(deDuped, &al)
-			seen[full] = true
-			//fmt.Print(full)
-		}
-	}
-
-	sort.Sort(ByPathLine(deDuped))
-	fixFileNames(deDuped)
-
-	if false {
-		for _, al := range deDuped {
-			fmt.Printf("%s, %d, %s\n", al.FilePath, al.LineNo, al.Message)
-		}
-	}
-	fmt.Printf("\n\n%d warnings\n", len(deDuped))
-
-	s := genAnalyzeHTML(deDuped)
-	err := ioutil.WriteFile("analyze-errors.html", []byte(s), 0644)
-	fataliferr(err)
-	// TODO: open a browser with analyze-errors.html
-}
-
-func parseSavedAnalyzeOuptut() {
-	d, err := ioutil.ReadFile("analyze-output.txt")
-	fataliferr(err)
-	parseAnalyzeOutput(d)
+	s3UploadReleaseMust(sumatraVersion)
 }
 
 func buildAnalyze() {
@@ -994,7 +411,7 @@ func buildAnalyze() {
 
 func buildSmoke() {
 	fmt.Printf("Smoke build\n")
-	downloadTranslations()
+	verifyTranslationsMust()
 
 	err := runMsbuild(true, "vs2015\\SumatraPDF.sln", "/t:Installer;SumatraPDF;Uninstaller;test_util", "/p:Configuration=Release;Platform=Win32", "/m")
 	fataliferr(err)
@@ -1063,106 +480,26 @@ func signMust(path string) {
 var sumLatestVer = 10175;
 var sumBuiltOn = "2015-07-23";
 var sumLatestName = "SumatraPDF-prerelease-10175.exe";
-var sumLatestExe = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-10175.exe";
-var sumLatestPdb = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-10175.pdb.zip";
-var sumLatestInstaller = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-10175-install.exe";
+var sumLatestExe = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-10175.exe";
+var sumLatestPdb = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-10175.pdb.zip";
+var sumLatestInstaller = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-10175-install.exe";
 */
 func createSumatraLatestJs() string {
 	currDate := time.Now().Format("2006-01-02")
 	v := svnPreReleaseVer
 	return fmt.Sprintf(`
-		var sumLatestVer = %d;
+		var sumLatestVer = %s;
 		var sumBuiltOn = "%s";
-		var sumLatestName = "SumatraPDF-prerelease-%d.exe";
+		var sumLatestName = "SumatraPDF-prerelease-%s.exe";
 
-		var sumLatestExe = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%d.exe";
-		var sumLatestPdb = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%d.pdb.zip";
-		var sumLatestInstaller = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%d-install.exe";
+		var sumLatestExe = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s.exe";
+		var sumLatestPdb = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s.pdb.zip";
+		var sumLatestInstaller = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s-install.exe";
 
-		var sumLatestExe64 = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%d-64.exe";
-		var sumLatestPdb64 = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%d-64.pdb.zip";
-		var sumLatestInstaller64 = "http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%d-install-64.exe";
+		var sumLatestExe64 = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s-64.exe";
+		var sumLatestPdb64 = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s-64.pdb.zip";
+		var sumLatestInstaller64 = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s-64-install.exe";
 `, v, currDate, v, v, v, v, v, v, v)
-}
-
-//Note: http.DefaultClient is more robust than aws.RetryingClient
-//(which fails for me with a timeout for large files e.g. ~6MB)
-func getS3Client() *http.Client {
-	// return aws.RetryingClient
-	return http.DefaultClient
-}
-
-func s3GetBucket() *s3.Bucket {
-	s3BucketName := "kjkpub"
-	secrets := readSecretsMust()
-	auth := aws.Auth{
-		AccessKey: secrets.AwsAccess,
-		SecretKey: secrets.AwsSecret,
-	}
-	// Note: it's important that region is aws.USEast. This is where my bucket
-	// is and giving a different region will fail
-	s3Obj := s3.New(auth, aws.USEast, getS3Client())
-	return s3Obj.Bucket(s3BucketName)
-}
-
-func s3UploadFile(pathRemote, pathLocal string) error {
-	fmt.Printf("Uploading '%s' as '%s'. ", pathLocal, pathRemote)
-	start := time.Now()
-	bucket := s3GetBucket()
-	mimeType := mime.TypeByExtension(filepath.Ext(pathLocal))
-	fileSize := fileSizeMust(pathLocal)
-	perm := s3.PublicRead
-	f, err := os.Open(pathLocal)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	opts := s3.Options{}
-	//opts.ContentMD5 =
-	err = bucket.PutReader(pathRemote, f, fileSize, mimeType, perm, opts)
-	appendTiming(time.Since(start), fmt.Sprintf("Upload of %s, size: %d", pathRemote, fileSize))
-	if err != nil {
-		fmt.Printf("Failed with %s\n", err)
-	} else {
-		fmt.Printf("Done in %s\n", time.Since(start))
-	}
-	return err
-}
-
-func s3UploadString(pathRemote string, s string) error {
-	fmt.Printf("Uploading string of length %d  as '%s'\n", len(s), pathRemote)
-	bucket := s3GetBucket()
-	d := []byte(s)
-	mimeType := mime.TypeByExtension(filepath.Ext(pathRemote))
-	opts := s3.Options{}
-	//opts.ContentMD5 =
-	return bucket.Put(pathRemote, d, mimeType, s3.PublicRead, opts)
-}
-
-func s3UploadFile2(pathRemote, pathLocal string) error {
-	fmt.Printf("Uploading '%s' as '%s'\n", pathLocal, pathRemote)
-	bucket := s3GetBucket()
-	d, err := ioutil.ReadFile(pathLocal)
-	if err != nil {
-		return err
-	}
-	mimeType := mime.TypeByExtension(filepath.Ext(pathLocal))
-	opts := s3.Options{}
-	//opts.ContentMD5 =
-	return bucket.Put(pathRemote, d, mimeType, s3.PublicRead, opts)
-}
-
-func s3UploadFiles(s3Dir string, dir string, files []string) error {
-	n := len(files) / 2
-	for i := 0; i < n; i++ {
-		pathLocal := filepath.Join(dir, files[2*i])
-		pathRemote := files[2*i+1]
-		err := s3UploadFile(s3Dir+pathRemote, pathLocal)
-		if err != nil {
-			return fmt.Errorf("failed to upload '%s' as '%s', err: %s", pathLocal, pathRemote, err)
-		}
-	}
-	return nil
 }
 
 // FilesForVer describes pre-release files in s3 for a given version
@@ -1241,6 +578,7 @@ func addToFilesForVer(path, name, verStr string, files []*FilesForVer) []*FilesF
 	return append(files, &fi)
 }
 
+// ByVerFilesForVer sorts by version
 type ByVerFilesForVer []*FilesForVer
 
 func (s ByVerFilesForVer) Len() int {
@@ -1258,7 +596,7 @@ func s3ListPreReleaseFilesMust(dbg bool) []*FilesForVer {
 	fatalif(preRelNameRegexps == nil, "preRelNameRegexps == nil")
 	var res []*FilesForVer
 	bucket := s3GetBucket()
-	resp, err := bucket.List(s3PreRelDir, "", "", 10000)
+	resp, err := bucket.List(s3PreRelDir, "", "", maxS3Results)
 	fataliferr(err)
 	fatalif(resp.IsTruncated, "truncated response! implement reading all the files\n")
 	if dbg {
@@ -1294,6 +632,9 @@ func s3ListPreReleaseFilesMust(dbg bool) []*FilesForVer {
 }
 
 func s3DeleteOldestPreRel() {
+	if !flgUpload {
+		return
+	}
 	maxToRetain := 10
 	files := s3ListPreReleaseFilesMust(false)
 	if len(files) < maxToRetain {
@@ -1315,24 +656,18 @@ func s3DeleteOldestPreRel() {
 	}
 }
 
-func s3Delete(path string) error {
-	bucket := s3GetBucket()
-	return bucket.Del(path)
-}
-
-func s3Exists(s3Path string) bool {
-	bucket := s3GetBucket()
-	exists, err := bucket.Exists(s3Path)
-	if err != nil {
-		fmt.Printf("bucket.Exists('%s') failed with %s\n", s3Path, err)
-		return false
+// upload as:
+// https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-1027-install.exe etc.
+func s3UploadPreReleaseMust(ver string) {
+	if !flgUpload {
+		fmt.Printf("Skipping pre-release upload to s3 because -upload flag not given\n")
+		return
 	}
-	return exists
-}
 
-// https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-1027-install.exe
-func s3UploadPreReleaseMust() {
-	prefix := fmt.Sprintf("SumatraPDF-prerelease-%d", svnPreReleaseVer)
+	s3DeleteOldestPreRel()
+
+	prefix := fmt.Sprintf("SumatraPDF-prerelease-%s", ver)
+	manifestRemotePath := s3PreRelDir + prefix + "-manifest.txt"
 	files := []string{
 		"SumatraPDF.exe", fmt.Sprintf("%s.exe", prefix),
 		"Installer.exe", fmt.Sprintf("%s-install.exe", prefix),
@@ -1342,78 +677,118 @@ func s3UploadPreReleaseMust() {
 	err := s3UploadFiles(s3PreRelDir, "rel", files)
 	fataliferr(err)
 
+	prefix = fmt.Sprintf("SumatraPDF-prerelease-%s-64", ver)
 	files = []string{
-		"SumatraPDF.exe", fmt.Sprintf("%s-64.exe", prefix),
-		"Installer.exe", fmt.Sprintf("%s-install-64.exe", prefix),
-		"SumatraPDF.pdb.zip", fmt.Sprintf("%s.pdb-64.zip", prefix),
-		"SumatraPDF.pdb.lzsa", fmt.Sprintf("%s.pdb-64.lzsa", prefix),
+		"SumatraPDF.exe", fmt.Sprintf("%s.exe", prefix),
+		"Installer.exe", fmt.Sprintf("%s-install.exe", prefix),
+		"SumatraPDF.pdb.zip", fmt.Sprintf("%s.pdb.zip", prefix),
+		"SumatraPDF.pdb.lzsa", fmt.Sprintf("%s.pdb.lzsa", prefix),
 	}
 	err = s3UploadFiles(s3PreRelDir, "rel64", files)
 	fataliferr(err)
 
-	manifestRemotePath := s3PreRelDir + fmt.Sprintf("manifest-%d.txt", svnPreReleaseVer)
 	manifestLocalPath := pj("rel", "manifest.txt")
-	err = s3UploadFile(manifestRemotePath, manifestLocalPath)
+	err = s3UploadFileReader(manifestRemotePath, manifestLocalPath, true)
 	fataliferr(err)
 
 	s := createSumatraLatestJs()
-	err = s3UploadString("sumatrapdf/sumatralatest.js", s)
+	err = s3UploadString("sumatrapdf/sumatralatest.js", s, true)
 	fataliferr(err)
 
 	//sumatrapdf/sumpdf-prerelease-latest.txt
-	s = fmt.Sprintf("%d\n", svnPreReleaseVer)
-	err = s3UploadString("sumatrapdf/sumpdf-prerelease-latest.txt", s)
+	err = s3UploadString("sumatrapdf/sumpdf-prerelease-latest.txt", ver, true)
 	fataliferr(err)
 
 	//sumatrapdf/sumpdf-prerelease-update.txt
 	//don't set a Stable version for pre-release builds
-	s = fmt.Sprintf("[SumatraPDF]\nLatest %d\n", svnPreReleaseVer)
-	err = s3UploadString("sumatrapdf/sumpdf-prerelease-update.txt", s)
+	s = fmt.Sprintf("[SumatraPDF]\nLatest %s\n", ver)
+	err = s3UploadString("sumatrapdf/sumpdf-prerelease-update.txt", s, true)
 	fataliferr(err)
+}
+
+/*
+Given result of git btranch that looks like:
+
+master
+* rel3.1working
+
+Return active branch marked with "*" ('rel3.1working' in this case) or empty
+string if no current branch.
+*/
+func getCurrentBranch(d []byte) string {
+	lines := toTrimmedLines(d)
+	for _, l := range lines {
+		if strings.HasPrefix(l, "* ") {
+			return l[2:]
+		}
+	}
+	return ""
 }
 
 // When doing a release build, it must be from from a branch rel${ver}working
-// e.g. rel3.1working, where ${ver} must much sumatraVersion
+// e.g. rel3.1working, where ${ver} must match first 2 digits in sumatraVersion
+// i.e. we allow 3.1.1 and 3.1.2 from branch 3.1 but not from 3.0 or 3.2
 func verifyOnReleaseBranchMust() {
 	// 'git branch' return branch name in format: '* master'
-	out := strings.TrimSpace(string(runExeMust("git", "branch")))
-	pref := "* rel"
+	out := runExeMust("git", "branch")
+	currBranch := getCurrentBranch(out)
+	pref := "rel"
 	suff := "working"
-	fatalif(!strings.HasPrefix(out, pref), "running on branch '%s' which is not 'rel${ver}working' branch\n", out)
-	fatalif(!strings.HasSuffix(out, suff), "running on branch '%s' which is not 'rel${ver}working' branch\n", out)
+	fatalif(!strings.HasPrefix(currBranch, pref), "running on branch '%s' which is not 'rel${ver}working' branch\n", currBranch)
+	fatalif(!strings.HasSuffix(currBranch, suff), "running on branch '%s' which is not 'rel${ver}working' branch\n", currBranch)
 
-	ver := out[len(pref):]
-	ver = out[:len(out)-len(suff)]
-	fatalif(ver != sumatraVersion, "version mismatch, sumatra: '%s', branch: '%s'", sumatraVersion, ver)
+	ver := currBranch[len(pref):]
+	ver = ver[:len(ver)-len(suff)]
+
+	fatalif(!strings.HasPrefix(sumatraVersion, ver), "version mismatch, sumatra: '%s', branch: '%s'\n", sumatraVersion, ver)
 }
 
-// https://kjkpub.s3.amazonaws.com/sumatrapdf/rel/SumatraPDF-3.0-install.exe
-// TODO: more files
-func s3UploadReleaseMust() {
-	s3Dir := "sumatrapdf/rel/"
+func verifyOnMasterBranchMust() {
+	// 'git branch' return branch name in format: '* master'
+	out := runExeMust("git", "branch")
+	currBranch := getCurrentBranch(out)
+	fatalif(currBranch != "master", "no on master branch (branch: '%s')\n", currBranch)
+}
 
+// upload as:
+// https://kjkpub.s3.amazonaws.com/sumatrapdf/rel/SumatraPDF-3.1-install.exe etc.
+func s3UploadReleaseMust(ver string) {
+	if !flgUpload {
+		fmt.Printf("Skipping release upload to s3 because -upload flag not given\n")
+		return
+	}
+
+	prefix := fmt.Sprintf("SumatraPDF-%s", ver)
+	manifestRemotePath := s3RelDir + prefix + "-manifest.txt"
 	files := []string{
-		"SumatraPDF.exe", fmt.Sprintf("SumatraPDF-prerelease-%d.exe", svnPreReleaseVer),
-		"Installer.exe", fmt.Sprintf("SumatraPDF-prerelease-%d-install.exe", svnPreReleaseVer),
+		"SumatraPDF.exe", fmt.Sprintf("%s.exe", prefix),
+		"SumatraPDF.zip", fmt.Sprintf("%s.zip", prefix),
+		"Installer.exe", fmt.Sprintf("%s-install.exe", prefix),
+		"SumatraPDF.pdb.zip", fmt.Sprintf("%s.pdb.zip", prefix),
+		"SumatraPDF.pdb.lzsa", fmt.Sprintf("%s.pdb.lzsa", prefix),
 	}
-	err := s3UploadFiles(s3Dir, "rel", files)
+	err := s3UploadFiles(s3RelDir, "rel", files)
 	fataliferr(err)
 
+	prefix = fmt.Sprintf("SumatraPDF-%s-64", ver)
 	files = []string{
-		"SumatraPDF.exe", fmt.Sprintf("SumatraPDF-prerelease-%d-64.exe", svnPreReleaseVer),
-		"Installer.exe", fmt.Sprintf("SumatraPDF-prerelease-%d-install-64.exe", svnPreReleaseVer),
+		"SumatraPDF.exe", fmt.Sprintf("%s.exe", prefix),
+		"SumatraPDF.zip", fmt.Sprintf("%s.zip", prefix),
+		"Installer.exe", fmt.Sprintf("%s-install.exe", prefix),
+		"SumatraPDF.pdb.zip", fmt.Sprintf("%s.pdb.zip", prefix),
+		"SumatraPDF.pdb.lzsa", fmt.Sprintf("%s.pdb.lzsa", prefix),
 	}
-	err = s3UploadFiles(s3Dir, "rel64", files)
+	err = s3UploadFiles(s3RelDir, "rel64", files)
 	fataliferr(err)
-	// write manifest last
-	s3Path := s3Dir + fmt.Sprintf("SumatraPDF-prerelease-%d-manifest.txt", svnPreReleaseVer)
-	err = s3UploadFile(s3Path, manifestPath())
-	fataliferr(err)
-}
 
-func removeDirMust(dir string) {
-	err := os.RemoveAll(dir)
+	// upload manifest last
+	manifestLocalPath := pj("rel", "manifest.txt")
+	err = s3UploadFileReader(manifestRemotePath, manifestLocalPath, true)
 	fataliferr(err)
+
+	// Note: not uploading auto-update version info. We update it separately,
+	// a week or so after build is released, so that if there are serious issues,
+	// we can create an update and less people will be affected
 }
 
 func clean() {
@@ -1430,10 +805,10 @@ func clean() {
 }
 
 func detectVersions() {
-	svnPreReleaseVer = getGitLinearVersionMust()
+	svnPreReleaseVer = strconv.Itoa(getGitLinearVersionMust())
 	gitSha1 = getGitSha1Must()
 	sumatraVersion = extractSumatraVersionMust()
-	fmt.Printf("svnPreReleaseVer: '%d'\n", svnPreReleaseVer)
+	fmt.Printf("svnPreReleaseVer: '%s'\n", svnPreReleaseVer)
 	fmt.Printf("gitSha1: '%s'\n", gitSha1)
 	fmt.Printf("sumatraVersion: '%s'\n", sumatraVersion)
 }
@@ -1460,27 +835,12 @@ func saveTranslationsMust(d []byte) {
 	fataliferr(err)
 }
 
-func httpDlMust(uri string) []byte {
-	res, err := http.Get(uri)
-	fataliferr(err)
-	d, err := ioutil.ReadAll(res.Body)
-	res.Body.Close()
-	fataliferr(err)
-	return d
-}
-
-func downloadTranslations() {
+func verifyTranslationsMust() {
 	sha1 := lastTranslationsSha1HexMust()
 	url := fmt.Sprintf("http://www.apptranslator.org/dltrans?app=SumatraPDF&sha1=%s", sha1)
 	d := httpDlMust(url)
 	lines := toTrimmedLines(d)
-	if lines[1] == "No change" {
-		fmt.Printf("translations didn't change\n")
-		return
-	}
-	saveTranslationsMust(d)
-	fmt.Printf("\nTranslations have changed! You must checkin before continuing!\n")
-	os.Exit(1)
+	fatalif(lines[1] != "No change", "translations changed, run python scripts/trans_download.py\n")
 }
 
 func parseCmdLine() {
@@ -1505,7 +865,7 @@ func testS3Upload() {
 	dst := "temp2.txt"
 	src := pj("rel", "SumatraPDF.exe")
 	//src := pj("rel", "buildcmap.exe")
-	err := s3UploadFile2(dst, src)
+	err := s3UploadFile(dst, src, true)
 	if err != nil {
 		fmt.Printf("upload failed with %s\n", err)
 	} else {
@@ -1521,12 +881,18 @@ func testBuildLzsa() {
 
 func init() {
 	timeStart = time.Now()
+	logFileName = "build-log.txt"
 	compilePreRelNameRegexpsMust()
 }
 
 func main() {
 	//testBuildLzsa()
 	//testS3Upload()
+
+	if false {
+		err := os.Chdir(pj("..", "sumatrapdf-3.1"))
+		fataliferr(err)
+	}
 
 	if false {
 		detectVersions()

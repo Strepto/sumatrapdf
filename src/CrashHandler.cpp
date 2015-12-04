@@ -29,7 +29,7 @@
 // and sumatra proper. They must be implemented for each app.
 extern void GetStressTestInfo(str::Str<char>* s);
 extern bool CrashHandlerCanUseNet();
-extern void CrashHandlerMessage();
+extern void ShowCrashHandlerMessage();
 extern void GetProgramInfo(str::Str<char>& s);
 
 /* Note: we cannot use standard malloc()/free()/new()/delete() in crash handler.
@@ -335,7 +335,7 @@ static LONG WINAPI DumpExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
     SetEvent(gDumpEvent);
     WaitForSingleObject(gDumpThread, INFINITE);
 
-    CrashHandlerMessage();
+    ShowCrashHandlerMessage();
     TerminateProcess(GetCurrentProcess(), 1);
 
     return EXCEPTION_CONTINUE_SEARCH;
@@ -606,12 +606,12 @@ static WCHAR *BuildSymbolsUrl() {
     return str::Dup(SYMBOL_DOWNLOAD_URL);
 #else
 #ifdef SVN_PRE_RELEASE_VER
-    WCHAR *urlBase = L"http://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-" TEXT(QM(SVN_PRE_RELEASE_VER));
+    WCHAR *urlBase = L"https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-" TEXT(QM(SVN_PRE_RELEASE_VER));
 #else
-    WCHAR *urlBase = L"http://kjkpub.s3.amazonaws.com/sumatrapdf/rel/SumatraPDF-" TEXT(QM(CURR_VERSION));
+    WCHAR *urlBase = L"https://kjkpub.s3.amazonaws.com/sumatrapdf/rel/SumatraPDF-" TEXT(QM(CURR_VERSION));
 #endif
     WCHAR *is64 = IsProcess64() ? L"-64" : L"";
-    return str::Format(L"%s.pdb%s.lzsa", urlBase, is64);
+    return str::Format(L"%s%s.pdb.lzsa", urlBase, is64);
 #endif
 }
 

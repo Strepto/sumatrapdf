@@ -54,7 +54,7 @@ static void StrReplaceTest()
 
 static void StrSeqTest()
 {
-    const char *s = "foo\0a\0bar\0\0";
+    const char *s = "foo\0a\0bar\0";
     utassert(0 == seqstrings::StrToIdx(s, "foo"));
     utassert(1 == seqstrings::StrToIdx(s, "a"));
     utassert(2 == seqstrings::StrToIdx(s, "bar"));
@@ -129,6 +129,23 @@ static void StrConvTest()
     utassert(conv == 0 && str::Eq(cbuf, ""));
     conv = str::WcharToUtf8Buf(L"abcd", cbuf, dimof(cbuf));
     utassert(conv == 0 && str::Eq(cbuf, ""));
+}
+
+static void StrUrlExtractTest()
+{
+    utassert(!url::GetFileName(L""));
+    utassert(!url::GetFileName(L"#hash_only"));
+    utassert(!url::GetFileName(L"?query=only"));
+    ScopedMem<WCHAR> fileName(url::GetFileName(L"http://example.net/filename.ext"));
+    utassert(str::Eq(fileName, L"filename.ext"));
+    fileName.Set(url::GetFileName(L"http://example.net/filename.ext#with_hash"));
+    utassert(str::Eq(fileName, L"filename.ext"));
+    fileName.Set(url::GetFileName(L"http://example.net/path/to/filename.ext?more=data"));
+    utassert(str::Eq(fileName, L"filename.ext"));
+    fileName.Set(url::GetFileName(L"http://example.net/pa%74h/na%2f%6d%65%2ee%78t"));
+    utassert(str::Eq(fileName, L"na/me.ext"));
+    fileName.Set(url::GetFileName(L"http://example.net/%E2%82%AC"));
+    utassert(str::Eq((char *)fileName.Get(), "\xAC\x20"));
 }
 
 void StrTest()
@@ -391,11 +408,11 @@ void StrTest()
 
     {
         char str1[] = "aAbBcC... 1-9";
-        str::ToLower(str1);
+        str::ToLowerInPlace(str1);
         utassert(str::Eq(str1, "aabbcc... 1-9"));
 
         WCHAR wstr[] = L"aAbBcC... 1-9";
-        str::ToLower(wstr);
+        str::ToLowerInPlace(wstr);
         utassert(str::Eq(wstr, L"aabbcc... 1-9"));
     }
 
@@ -551,4 +568,5 @@ void StrTest()
     StrReplaceTest();
     StrSeqTest();
     StrConvTest();
+    StrUrlExtractTest();
 }

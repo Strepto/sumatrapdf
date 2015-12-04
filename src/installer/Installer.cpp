@@ -967,7 +967,7 @@ static void ParseCommandLine(WCHAR *cmdLine)
             gGlobalData.registerAsDefault = true;
         else if (is_arg_with_param("opt")) {
             WCHAR *opts = argList.At(++i);
-            str::ToLower(opts);
+            str::ToLowerInPlace(opts);
             str::TransChars(opts, L" ;", L",,");
             WStrVec optlist;
             optlist.Split(opts, L",", true);
@@ -1006,7 +1006,7 @@ static void ParseCommandLine(WCHAR *cmdLine)
 #define CRASH_DUMP_FILE_NAME         L"suminstaller.dmp"
 
 // no-op but must be defined for CrashHandler.cpp
-void CrashHandlerMessage() { }
+void ShowCrashHandlerMessage() { }
 void GetStressTestInfo(str::Str<char>* s) { UNUSED(s); }
 
 void GetProgramInfo(str::Str<char>& s)
@@ -1019,7 +1019,7 @@ void GetProgramInfo(str::Str<char>& s)
         s.Append(" 64-bit");
     }
 #ifdef DEBUG
-    if (!str::EndsWith(s.Get(), " (dbg)"))
+    if (!str::Find(s.Get(), " (dbg)"))
         s.Append(" (dbg)");
 #endif
     s.Append("\r\n");

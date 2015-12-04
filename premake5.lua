@@ -1,11 +1,8 @@
 --[[
 To generate Visual Studio files in vs2015 directory, run: premake5 vs2015
 
-I'm using premake5 alpha5 from http://premake.github.io/download.html#v5
+I'm using premake5 alpha6 from http://premake.github.io/download.html#v5
 (premake4 won't work, it doesn't support VS 2013+)
-
-TODO:
-* compare compilation flags nmake vs. us from compilation logs
 
 Note about nasm: when providing "-I foo/bar/" flag to nasm.exe, it must be
 "foo/bar/" and not just "foo/bar".
@@ -30,6 +27,7 @@ Reference for warnings:
  4702 - unreachable code
  4706 - assignment within conditional expression
  4800 - forcing value to bool (performance warning)
+ 4819 - The file contains a character that cannot be represented in the current code page
  4838 - conversion from X to Y requires a narrowing conversion
  4996 - POSIX name deprecated
 
@@ -49,15 +47,16 @@ workspace "SumatraPDF"
   filter "platforms:x32"
      architecture "x86"
      toolset "v140_xp"
+     buildoptions { "/arch:IA32" } -- disable the default /arch:SSE2 for 32-bit builds
      filter "action:vs2013"
       toolset "v120_xp"
   filter {}
 
   filter "platforms:x64"
      architecture "x86_64"
-     toolset "v140"
+     toolset "v140_xp"
      filter "action:vs2013"
-      toolset "v120"
+      toolset "v120_xp"
   filter {}
 
   disablewarnings { "4127", "4324", "4458", "4800" }
@@ -173,7 +172,7 @@ workspace "SumatraPDF"
   project "openjpeg"
     kind "StaticLib"
     language "C"
-    disablewarnings { "4100", "4244" }
+    disablewarnings { "4100", "4244", "4819" }
     includedirs { "ext/openjpeg" }
     openjpeg_files()
 
@@ -235,7 +234,7 @@ workspace "SumatraPDF"
   project "engines"
     kind "StaticLib"
     language "C++"
-    disablewarnings { "4018", "4057", "4189", "4244", "4267", "4295" }
+    disablewarnings { "4018", "4057", "4189", "4244", "4267", "4295", "4819" }
     disablewarnings { "4701", "4706", "4838"  }
     includedirs { "src/utils", "src/wingui", "src/mui" }
     includedirs { "ext/synctex", "ext/libdjvu", "ext/CHMLib/src", "ext/zlib", "mupdf/include" }
@@ -574,7 +573,10 @@ workspace "SumatraPDF"
       "version", "windowscodecs", "wininet"
     }
     dependson { "MakeLZSA", "SumatraPDF-no-MUPDF", "PdfFilter", "PdfPreview", "Uninstaller" }
-    prebuildcommands { "cd %{cfg.targetdir} & MakeLZSA.exe InstallerData.dat SumatraPDF-no-MUPDF.exe:SumatraPDF.exe libmupdf.dll:libmupdf.dll PdfFilter.dll:PdfFilter.dll PdfPreview.dll:PdfPreview.dll Uninstaller.exe:uninstall.exe ..\\mupdf\\resources\\fonts\\droid\\DroidSansFallback.ttf:DroidSansFallback.ttf"  }
+    -- Note: to allow 64-bit builds on 32-bit machine, always use 32-bit MakeLZSA.exe
+    -- TODO: checkin MakeLZSA.exe to bin and use that because this might still fail
+    -- if we didn't build 32-bit build first
+    prebuildcommands { "cd %{cfg.targetdir} & ..\\rel\\MakeLZSA.exe InstallerData.dat SumatraPDF-no-MUPDF.exe:SumatraPDF.exe libmupdf.dll:libmupdf.dll PdfFilter.dll:PdfFilter.dll PdfPreview.dll:PdfPreview.dll Uninstaller.exe:uninstall.exe ..\\mupdf\\resources\\fonts\\droid\\DroidSansFallback.ttf:DroidSansFallback.ttf"  }
 
 
   -- dummy project that builds all other projects
