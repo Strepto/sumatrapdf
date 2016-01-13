@@ -158,8 +158,8 @@ void PaintSelection(WindowInfo *win, HDC hdc)
             rects.Append(sel.GetRect(win->AsFixed()));
         }
     }
-
-    PaintTransparentRectangles(hdc, win->canvasRc, rects, gGlobalPrefs->fixedPageUI.selectionColor);
+	byte alpha = 0x5f;
+    PaintTransparentRectangles(hdc, win->canvasRc, rects, gGlobalPrefs->fixedPageUI.selectionColor, alpha, 0);
 }
 
 void UpdateTextSelection(WindowInfo *win, bool select)
