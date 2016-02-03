@@ -1212,9 +1212,10 @@ void DisplayModel::ScrollYBy(int dy, bool changePage)
             }
         }
     }
-
+	int minLimit = (int)round((viewPort.dy / 5) - viewPort.dy);
+	int maxLimit = (int)round(canvasSize.dy - (viewPort.dy / 5));
     newYOff += dy;
-    newYOff = limitValue(newYOff, 0, canvasSize.dy - viewPort.dy);
+    newYOff = limitValue(newYOff, minLimit, maxLimit);
     if (newYOff == currYOff)
         return;
 
